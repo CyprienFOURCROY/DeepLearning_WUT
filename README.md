@@ -7,3 +7,5 @@ CINIC-10 is an augmented extension of CIFAR-10. It contains the images from CIFA
 
 
 For the structure of the project : https://github.com/cookiecutter/cookiecutter
+
+
