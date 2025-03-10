@@ -1,0 +1,21 @@
+# CrossEntropyLoss: epoch 14 val error: 1.168297290802002
+def __init__(self):
+        super(BasicCNN, self).__init__()
+        # First convolutional layer
+        # Input: 3 channels (RGB), Output: 16 feature maps, 3x3 kernel
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(kernel_size=2)
+        
+        # Second convolutional layer
+        # Input: 16 feature maps, Output: 32 feature maps, 3x3 kernel
+        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(kernel_size=2)
+        
+        # Fully connected layers
+        # Assuming input images are 32x32, after two 2x2 pooling layers, we have 32/2/2 = 8
+        # So the feature maps are 8x8 with 32 channels: 32 * 8 * 8 = 2048
+        self.fc1 = nn.Linear(32 * 8 * 8, 128)
+        self.relu3 = nn.ReLU()
+        self.fc2 = nn.Linear(128, 10)  # 10 output classes (e.g., for CIFAR-10 dataset)
