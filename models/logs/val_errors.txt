@@ -19,3 +19,86 @@ def __init__(self):
         self.fc1 = nn.Linear(32 * 8 * 8, 128)
         self.relu3 = nn.ReLU()
         self.fc2 = nn.Linear(128, 10)  # 10 output classes (e.g., for CIFAR-10 dataset)
+
+
+
+bez Relu ostatniego
+
+[14, 200], time 599.8018717765808 loss: 1.013
+[14, 400], time 600.6094477176666 loss: 1.005
+[14, 600], time 601.41552734375 loss: 1.050
+[14, 800], time 602.2126257419586 loss: 1.043
+[14, 1000], time 603.059713602066 loss: 1.017
+[14, 1200], time 604.5739276409149 loss: 1.059
+[14, 1400], time 606.0691194534302 loss: 1.057
+[14, 1600], time 607.5682232379913 loss: 1.051
+[14, 1800], time 609.0803196430206 loss: 1.065
+[14, 2000], time 610.6078915596008 loss: 1.037
+[14, 2200], time 612.2033894062042 loss: 1.065
+[14, 2400], time 613.7600028514862 loss: 1.040
+[14, 2600], time 615.2978570461273 loss: 1.058
+[14, 2800], time 616.852322101593 loss: 1.064
+epoch 13 val error: 1.177594542503357
+
+Z Relu ostatnim
+[8, 200], time 308.40874004364014 loss: 0.899, acc: 68.0625%
+[8, 400], time 309.2068078517914 loss: 0.909, acc: 68.0390625%
+[8, 600], time 310.0173885822296 loss: 0.909, acc: 67.66145833333333%
+[8, 800], time 310.81546425819397 loss: 0.923, acc: 67.484375%
+[8, 1000], time 311.6400475502014 loss: 0.966, acc: 67.03125%
+[8, 1200], time 312.9818296432495 loss: 0.944, acc: 66.94270833333333%
+[8, 1400], time 314.51168966293335 loss: 0.954, acc: 66.75446428571429%
+[8, 1600], time 316.02078652381897 loss: 0.951, acc: 66.578125%
+[8, 1800], time 317.48285698890686 loss: 0.937, acc: 66.56770833333333%
+[8, 2000], time 318.9919900894165 loss: 0.942, acc: 66.53750000000001%
+[8, 2200], time 320.5058250427246 loss: 0.954, acc: 66.50852272727272%
+[8, 2400], time 322.0256154537201 loss: 0.960, acc: 66.42317708333333%
+[8, 2600], time 323.50509119033813 loss: 0.961, acc: 66.28966346153847%
+[8, 2800], time 325.01862025260925 loss: 0.964, acc: 66.2265625%
+epoch 7 val error: 1.1508972644805908, acc: 0.5952333333333333
+
+Nowa najlepsza architektura
+[9, 2800], time 378.21612310409546 loss: 0.913, acc: 66.84151785714286%
+epoch 8 val error: 1.0659722089767456, acc: 0.6228111111111111	
+
+class BasicCNN(nn.Module):
+    def __init__(self):
+        super(BasicCNN, self).__init__()
+        # First convolutional layer
+        # Input: 3 channels (RGB), Output: 16 feature maps, 3x3 kernel
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(kernel_size=2)
+        
+        # Second convolutional layer
+        # Input: 16 feature maps, Output: 32 feature maps, 3x3 kernel
+        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(kernel_size=2)
+        
+        self.conv3 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
+        self.relu3 = nn.ReLU()
+        self.pool3 = nn.MaxPool2d(kernel_size=2)
+        
+        # Fully connected layers
+        # Assuming input images are 32x32, after two 2x2 pooling layers, we have 32/2/2 = 8
+        # So the feature maps are 8x8 with 32 channels: 32 * 8 * 8 = 2048
+        self.fc1 = nn.Linear(64 * 4 * 4, 128)
+        self.relu4 = nn.ReLU()
+        self.fc2 = nn.Linear(128, 10)  # 10 output classes (e.g., for CIFAR-10 dataset)
+    
+    def forward(self, x):
+        # Apply convolutional layers
+        x = self.pool1(self.relu1(self.conv1(x)))
+        x = self.pool2(self.relu2(self.conv2(x)))
+        x = self.pool3(self.relu3(self.conv3(x)))
+        
+        # Flatten the feature maps
+        x = x.view(-1, 64 * 4 * 4)
+        
+        # Apply fully connected layers
+        x = self.fc2(self.relu4(self.fc1(x)))
+        
+        return x
+
+# Dodanie liniowej warstwy 128 -> 64 nie pomogło
