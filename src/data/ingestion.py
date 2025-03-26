@@ -42,7 +42,7 @@ def main(input_filepath, output_filepath, rotate, flip, brightness, contrast):
     transform_list = []
 
     if rotate:
-        degree = random.randint(-45, 4())
+        degree = random.randint(-45, 45)
         transform_list.append(transforms.RandomRotation(degrees=15))  
     if flip == "horizontal":
         transform_list.append(
