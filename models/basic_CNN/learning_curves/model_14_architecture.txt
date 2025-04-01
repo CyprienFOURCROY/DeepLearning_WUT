@@ -1,0 +1,1642 @@
+class DenseLayer(nn.Module):
+    def __init__(self, in_channels, growth_rate, bn_size, drop_rate):
+        super(DenseLayer, self).__init__()
+        # BN-ReLU-Conv(1x1)
+        self.bn1 = nn.BatchNorm2d(in_channels)
+        self.relu1 = nn.ReLU(inplace=True)
+        self.conv1 = nn.Conv2d(in_channels, bn_size * growth_rate, kernel_size=1, stride=1, bias=False)
+        
+        # BN-ReLU-Conv(3x3)
+        self.bn2 = nn.BatchNorm2d(bn_size * growth_rate)
+        self.relu2 = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(bn_size * growth_rate, growth_rate, kernel_size=3, stride=1, padding=1, bias=False)
+        
+        self.drop_rate = drop_rate
+        
+    def forward(self, x):
+        new_features = self.conv1(self.relu1(self.bn1(x)))
+        new_features = self.conv2(self.relu2(self.bn2(new_features)))
+        if self.drop_rate > 0:
+            new_features = F.dropout(new_features, p=self.drop_rate, training=self.training)
+        return torch.cat([x, new_features], 1)
+
+class DenseBlock(nn.Module):
+    def __init__(self, num_layers, in_channels, growth_rate, bn_size, drop_rate):
+        super(DenseBlock, self).__init__()
+        self.layers = nn.ModuleList()
+        for i in range(num_layers):
+            self.layers.add_module('denselayer%d' % (i + 1),
+                                  DenseLayer(in_channels + i * growth_rate, growth_rate, bn_size, drop_rate))
+            
+    def forward(self, x):
+        features = x
+        for layer in self.layers:
+            features = layer(features)
+        return features
+
+class Transition(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(Transition, self).__init__()
+        self.bn = nn.BatchNorm2d(in_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False)
+        self.pool = nn.AvgPool2d(kernel_size=2, stride=2)
+        
+    def forward(self, x):
+        x = self.bn(x)
+        x = self.relu(x)
+        x = self.conv(x)
+        x = self.pool(x)
+        return x
+
+class DenseNet(nn.Module):
+    def __init__(self, growth_rate=12, block_config=(6, 12, 8), 
+                 num_init_features=32, bn_size=4, drop_rate=0.3, num_classes=10):
+        super(DenseNet, self).__init__()
+        
+        # First convolution
+        self.features = nn.Sequential(
+            nn.Conv2d(3, num_init_features, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(num_init_features),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        
+        # Each denseblock
+        num_features = num_init_features
+        for i, num_layers in enumerate(block_config):
+            # Add a dense block
+            block = DenseBlock(
+                num_layers=num_layers,
+                in_channels=num_features,
+                growth_rate=growth_rate,
+                bn_size=bn_size,
+                drop_rate=drop_rate
+            )
+            self.features.add_module('denseblock%d' % (i + 1), block)
+            num_features = num_features + num_layers * growth_rate
+            
+            # Add a transition layer between dense blocks (except after the last block)
+            if i != len(block_config) - 1:
+                trans = Transition(in_channels=num_features, out_channels=num_features // 2)
+                self.features.add_module('transition%d' % (i + 1), trans)
+                num_features = num_features // 2
+        
+        # Final batch norm
+        self.features.add_module('norm5', nn.BatchNorm2d(num_features))
+        self.features.add_module('relu5', nn.ReLU(inplace=True))
+        
+        # Linear layer
+        self.classifier = nn.Linear(num_features, num_classes)
+        
+        # Initialize weights
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.constant_(m.bias, 0)
+    
+    def forward(self, x):
+        features = self.features(x)
+        out = F.adaptive_avg_pool2d(features, (1, 1))
+        out = torch.flatten(out, 1)
+        out = self.classifier(out)
+        return out
+
+
+
+
+[1, 200], time 20.71s loss: 2.238, acc: 17.52%
+[1, 400], time 34.88s loss: 2.124, acc: 19.21%
+[1, 600], time 49.41s loss: 2.055, acc: 20.31%
+[1, 800], time 64.15s loss: 1.992, acc: 21.23%
+[1, 1000], time 78.30s loss: 1.949, acc: 22.07%
+[1, 1200], time 93.14s loss: 1.927, acc: 22.88%
+[1, 1400], time 107.44s loss: 1.903, acc: 23.58%
+[1, 1600], time 121.82s loss: 1.886, acc: 24.20%
+[1, 1800], time 136.82s loss: 1.870, acc: 24.81%
+[1, 2000], time 151.52s loss: 1.854, acc: 25.24%
+[1, 2200], time 165.77s loss: 1.862, acc: 25.61%
+[1, 2400], time 180.50s loss: 1.812, acc: 26.12%
+[1, 2600], time 194.47s loss: 1.817, acc: 26.53%
+[1, 2800], time 208.65s loss: 1.805, acc: 26.89%
+[1, 3000], time 222.58s loss: 1.804, acc: 27.22%
+[1, 3200], time 237.21s loss: 1.791, acc: 27.58%
+[1, 3400], time 251.12s loss: 1.746, acc: 28.00%
+[1, 3600], time 265.46s loss: 1.750, acc: 28.40%
+[1, 3800], time 279.86s loss: 1.722, acc: 28.76%
+[1, 4000], time 294.28s loss: 1.719, acc: 29.10%
+[1, 4200], time 308.96s loss: 1.717, acc: 29.40%
+[1, 4400], time 323.28s loss: 1.692, acc: 29.73%
+[1, 4600], time 336.99s loss: 1.696, acc: 29.98%
+[1, 4800], time 351.05s loss: 1.679, acc: 30.30%
+[1, 5000], time 365.48s loss: 1.664, acc: 30.61%
+[1, 5200], time 379.82s loss: 1.653, acc: 30.87%
+[1, 5400], time 394.45s loss: 1.648, acc: 31.16%
+[1, 5600], time 408.57s loss: 1.653, acc: 31.41%
+epoch 1 TRAIN error: 1.8216, acc: 0.3144
+epoch 1 VALIDATION error: 1.5540, acc: 0.4272
+[2, 200], time 462.10s loss: 1.642, acc: 39.08%
+[2, 400], time 468.57s loss: 1.632, acc: 39.27%
+[2, 600], time 474.83s loss: 1.612, acc: 39.64%
+[2, 800], time 481.07s loss: 1.597, acc: 39.98%
+[2, 1000], time 487.27s loss: 1.587, acc: 40.27%
+[2, 1200], time 493.64s loss: 1.611, acc: 40.13%
+[2, 1400], time 499.91s loss: 1.609, acc: 40.23%
+[2, 1600], time 506.21s loss: 1.578, acc: 40.40%
+[2, 1800], time 512.54s loss: 1.596, acc: 40.49%
+[2, 2000], time 518.85s loss: 1.584, acc: 40.64%
+[2, 2200], time 525.10s loss: 1.579, acc: 40.72%
+[2, 2400], time 531.12s loss: 1.557, acc: 40.82%
+[2, 2600], time 537.52s loss: 1.566, acc: 40.93%
+[2, 2800], time 543.66s loss: 1.550, acc: 41.04%
+[2, 3000], time 549.65s loss: 1.540, acc: 41.19%
+[2, 3200], time 555.86s loss: 1.542, acc: 41.36%
+[2, 3400], time 562.01s loss: 1.557, acc: 41.45%
+[2, 3600], time 568.24s loss: 1.535, acc: 41.54%
+[2, 3800], time 574.61s loss: 1.536, acc: 41.64%
+[2, 4000], time 580.86s loss: 1.554, acc: 41.71%
+[2, 4200], time 587.22s loss: 1.528, acc: 41.80%
+[2, 4400], time 593.32s loss: 1.501, acc: 41.93%
+[2, 4600], time 599.45s loss: 1.507, acc: 41.99%
+[2, 4800], time 605.73s loss: 1.546, acc: 42.03%
+[2, 5000], time 612.09s loss: 1.515, acc: 42.12%
+[2, 5200], time 618.29s loss: 1.522, acc: 42.19%
+[2, 5400], time 624.69s loss: 1.464, acc: 42.33%
+[2, 5600], time 630.83s loss: 1.483, acc: 42.45%
+epoch 2 TRAIN error: 1.5578, acc: 0.4247
+epoch 2 VALIDATION error: 1.3747, acc: 0.4982
+[3, 200], time 678.05s loss: 1.476, acc: 45.39%
+[3, 400], time 684.47s loss: 1.471, acc: 45.78%
+[3, 600], time 690.74s loss: 1.480, acc: 45.86%
+[3, 800], time 697.08s loss: 1.468, acc: 45.90%
+[3, 1000], time 703.41s loss: 1.463, acc: 45.87%
+[3, 1200], time 709.84s loss: 1.444, acc: 46.04%
+[3, 1400], time 716.15s loss: 1.450, acc: 46.22%
+[3, 1600], time 722.44s loss: 1.454, acc: 46.24%
+[3, 1800], time 728.49s loss: 1.453, acc: 46.37%
+[3, 2000], time 734.69s loss: 1.440, acc: 46.48%
+[3, 2200], time 741.01s loss: 1.448, acc: 46.56%
+[3, 2400], time 747.11s loss: 1.435, acc: 46.63%
+[3, 2600], time 753.31s loss: 1.429, acc: 46.69%
+[3, 2800], time 759.56s loss: 1.430, acc: 46.75%
+[3, 3000], time 765.69s loss: 1.421, acc: 46.76%
+[3, 3200], time 771.84s loss: 1.426, acc: 46.81%
+[3, 3400], time 778.09s loss: 1.430, acc: 46.81%
+[3, 3600], time 784.32s loss: 1.404, acc: 46.96%
+[3, 3800], time 790.59s loss: 1.420, acc: 47.02%
+[3, 4000], time 796.80s loss: 1.415, acc: 47.10%
+[3, 4200], time 802.92s loss: 1.412, acc: 47.17%
+[3, 4400], time 809.09s loss: 1.401, acc: 47.22%
+[3, 4600], time 815.26s loss: 1.419, acc: 47.25%
+[3, 4800], time 821.40s loss: 1.412, acc: 47.29%
+[3, 5000], time 827.71s loss: 1.387, acc: 47.38%
+[3, 5200], time 833.87s loss: 1.401, acc: 47.42%
+[3, 5400], time 839.99s loss: 1.415, acc: 47.46%
+[3, 5600], time 846.12s loss: 1.382, acc: 47.52%
+epoch 3 TRAIN error: 1.4312, acc: 0.4754
+epoch 3 VALIDATION error: 1.3584, acc: 0.5147
+[4, 200], time 892.48s loss: 1.358, acc: 50.38%
+[4, 400], time 898.39s loss: 1.384, acc: 49.92%
+[4, 600], time 904.56s loss: 1.348, acc: 50.33%
+[4, 800], time 910.53s loss: 1.388, acc: 49.75%
+[4, 1000], time 916.69s loss: 1.376, acc: 49.73%
+[4, 1200], time 922.95s loss: 1.364, acc: 49.83%
+[4, 1400], time 929.10s loss: 1.373, acc: 49.86%
+[4, 1600], time 935.47s loss: 1.379, acc: 49.80%
+[4, 1800], time 941.74s loss: 1.351, acc: 49.89%
+[4, 2000], time 948.10s loss: 1.375, acc: 49.84%
+[4, 2200], time 954.38s loss: 1.348, acc: 49.92%
+[4, 2400], time 960.74s loss: 1.351, acc: 50.00%
+[4, 2600], time 966.94s loss: 1.352, acc: 50.09%
+[4, 2800], time 973.18s loss: 1.331, acc: 50.17%
+[4, 3000], time 979.54s loss: 1.369, acc: 50.16%
+[4, 3200], time 985.96s loss: 1.338, acc: 50.27%
+[4, 3400], time 992.23s loss: 1.342, acc: 50.33%
+[4, 3600], time 998.58s loss: 1.333, acc: 50.35%
+[4, 3800], time 1004.82s loss: 1.317, acc: 50.43%
+[4, 4000], time 1011.08s loss: 1.349, acc: 50.47%
+[4, 4200], time 1017.35s loss: 1.329, acc: 50.51%
+[4, 4400], time 1023.67s loss: 1.314, acc: 50.61%
+[4, 4600], time 1029.99s loss: 1.314, acc: 50.66%
+[4, 4800], time 1036.42s loss: 1.325, acc: 50.73%
+[4, 5000], time 1042.72s loss: 1.325, acc: 50.80%
+[4, 5200], time 1048.99s loss: 1.336, acc: 50.80%
+[4, 5400], time 1055.42s loss: 1.300, acc: 50.88%
+[4, 5600], time 1061.81s loss: 1.315, acc: 50.93%
+epoch 4 TRAIN error: 1.3458, acc: 0.5093
+epoch 4 VALIDATION error: 1.2111, acc: 0.5656
+[5, 200], time 1109.55s loss: 1.299, acc: 52.50%
+[5, 400], time 1115.98s loss: 1.285, acc: 52.73%
+[5, 600], time 1122.41s loss: 1.289, acc: 52.96%
+[5, 800], time 1128.85s loss: 1.288, acc: 52.86%
+[5, 1000], time 1135.34s loss: 1.284, acc: 53.07%
+[5, 1200], time 1141.74s loss: 1.276, acc: 53.11%
+[5, 1400], time 1148.08s loss: 1.302, acc: 53.00%
+[5, 1600], time 1154.46s loss: 1.303, acc: 52.99%
+[5, 1800], time 1160.87s loss: 1.294, acc: 53.04%
+[5, 2000], time 1167.32s loss: 1.285, acc: 53.09%
+[5, 2200], time 1173.66s loss: 1.286, acc: 53.18%
+[5, 2400], time 1180.09s loss: 1.303, acc: 53.21%
+[5, 2600], time 1186.44s loss: 1.289, acc: 53.22%
+[5, 2800], time 1192.91s loss: 1.302, acc: 53.17%
+[5, 3000], time 1199.33s loss: 1.278, acc: 53.20%
+[5, 3200], time 1205.58s loss: 1.268, acc: 53.26%
+[5, 3400], time 1211.98s loss: 1.281, acc: 53.27%
+[5, 3600], time 1218.34s loss: 1.290, acc: 53.26%
+[5, 3800], time 1224.64s loss: 1.289, acc: 53.29%
+[5, 4000], time 1230.79s loss: 1.281, acc: 53.34%
+[5, 4200], time 1237.09s loss: 1.256, acc: 53.38%
+[5, 4400], time 1243.37s loss: 1.235, acc: 53.48%
+[5, 4600], time 1249.69s loss: 1.267, acc: 53.53%
+[5, 4800], time 1256.08s loss: 1.269, acc: 53.57%
+[5, 5000], time 1262.40s loss: 1.257, acc: 53.63%
+[5, 5200], time 1268.63s loss: 1.265, acc: 53.64%
+[5, 5400], time 1274.77s loss: 1.256, acc: 53.69%
+[5, 5600], time 1280.92s loss: 1.248, acc: 53.73%
+epoch 5 TRAIN error: 1.2793, acc: 0.5374
+epoch 5 VALIDATION error: 1.1229, acc: 0.6004
+[6, 200], time 1328.61s loss: 1.238, acc: 54.80%
+[6, 400], time 1335.06s loss: 1.225, acc: 54.87%
+[6, 600], time 1341.26s loss: 1.243, acc: 54.78%
+[6, 800], time 1347.60s loss: 1.242, acc: 54.66%
+[6, 1000], time 1353.83s loss: 1.233, acc: 54.92%
+[6, 1200], time 1360.10s loss: 1.244, acc: 54.98%
+[6, 1400], time 1366.36s loss: 1.223, acc: 55.00%
+[6, 1600], time 1372.76s loss: 1.242, acc: 54.95%
+[6, 1800], time 1379.08s loss: 1.220, acc: 55.06%
+[6, 2000], time 1385.32s loss: 1.247, acc: 55.01%
+[6, 2200], time 1391.67s loss: 1.246, acc: 54.96%
+[6, 2400], time 1397.98s loss: 1.244, acc: 54.99%
+[6, 2600], time 1404.25s loss: 1.251, acc: 54.95%
+[6, 2800], time 1410.68s loss: 1.221, acc: 55.01%
+[6, 3000], time 1416.98s loss: 1.211, acc: 55.12%
+[6, 3200], time 1423.31s loss: 1.208, acc: 55.21%
+[6, 3400], time 1429.68s loss: 1.208, acc: 55.30%
+[6, 3600], time 1436.09s loss: 1.233, acc: 55.26%
+[6, 3800], time 1442.47s loss: 1.206, acc: 55.33%
+[6, 4000], time 1448.83s loss: 1.195, acc: 55.40%
+[6, 4200], time 1455.20s loss: 1.213, acc: 55.40%
+[6, 4400], time 1461.57s loss: 1.191, acc: 55.47%
+[6, 4600], time 1468.01s loss: 1.218, acc: 55.47%
+[6, 4800], time 1474.32s loss: 1.243, acc: 55.44%
+[6, 5000], time 1480.67s loss: 1.233, acc: 55.42%
+[6, 5200], time 1487.11s loss: 1.222, acc: 55.45%
+[6, 5400], time 1493.31s loss: 1.214, acc: 55.46%
+[6, 5600], time 1499.49s loss: 1.194, acc: 55.51%
+epoch 6 TRAIN error: 1.2252, acc: 0.5551
+epoch 6 VALIDATION error: 1.0713, acc: 0.6195
+[7, 200], time 1547.10s loss: 1.205, acc: 56.33%
+[7, 400], time 1553.55s loss: 1.195, acc: 56.70%
+[7, 600], time 1559.92s loss: 1.213, acc: 56.69%
+[7, 800], time 1566.20s loss: 1.198, acc: 56.80%
+[7, 1000], time 1572.57s loss: 1.169, acc: 57.02%
+[7, 1200], time 1579.01s loss: 1.186, acc: 56.97%
+[7, 1400], time 1585.12s loss: 1.200, acc: 56.96%
+[7, 1600], time 1591.49s loss: 1.186, acc: 57.08%
+[7, 1800], time 1597.92s loss: 1.175, acc: 57.15%
+[7, 2000], time 1604.10s loss: 1.161, acc: 57.31%
+[7, 2200], time 1610.43s loss: 1.180, acc: 57.28%
+[7, 2400], time 1616.82s loss: 1.202, acc: 57.25%
+[7, 2600], time 1622.99s loss: 1.173, acc: 57.26%
+[7, 2800], time 1629.40s loss: 1.166, acc: 57.33%
+[7, 3000], time 1635.58s loss: 1.181, acc: 57.34%
+[7, 3200], time 1641.78s loss: 1.179, acc: 57.37%
+[7, 3400], time 1648.18s loss: 1.178, acc: 57.37%
+[7, 3600], time 1654.43s loss: 1.175, acc: 57.35%
+[7, 3800], time 1660.70s loss: 1.173, acc: 57.34%
+[7, 4000], time 1667.01s loss: 1.171, acc: 57.36%
+[7, 4200], time 1673.36s loss: 1.177, acc: 57.38%
+[7, 4400], time 1679.71s loss: 1.168, acc: 57.41%
+[7, 4600], time 1686.00s loss: 1.159, acc: 57.46%
+[7, 4800], time 1692.21s loss: 1.191, acc: 57.45%
+[7, 5000], time 1698.64s loss: 1.163, acc: 57.48%
+[7, 5200], time 1704.96s loss: 1.183, acc: 57.47%
+[7, 5400], time 1711.23s loss: 1.172, acc: 57.48%
+[7, 5600], time 1717.45s loss: 1.189, acc: 57.44%
+epoch 7 TRAIN error: 1.1807, acc: 0.5745
+epoch 7 VALIDATION error: 1.0195, acc: 0.6342
+[8, 200], time 1764.91s loss: 1.161, acc: 58.77%
+[8, 400], time 1771.22s loss: 1.151, acc: 58.38%
+[8, 600], time 1777.43s loss: 1.144, acc: 58.67%
+[8, 800], time 1783.62s loss: 1.163, acc: 58.55%
+[8, 1000], time 1789.93s loss: 1.149, acc: 58.58%
+[8, 1200], time 1796.25s loss: 1.158, acc: 58.41%
+[8, 1400], time 1802.66s loss: 1.154, acc: 58.42%
+[8, 1600], time 1808.82s loss: 1.158, acc: 58.38%
+[8, 1800], time 1815.12s loss: 1.119, acc: 58.49%
+[8, 2000], time 1821.40s loss: 1.141, acc: 58.52%
+[8, 2200], time 1827.45s loss: 1.151, acc: 58.57%
+[8, 2400], time 1833.76s loss: 1.139, acc: 58.63%
+[8, 2600], time 1839.94s loss: 1.146, acc: 58.63%
+[8, 2800], time 1846.20s loss: 1.145, acc: 58.64%
+[8, 3000], time 1852.45s loss: 1.116, acc: 58.79%
+[8, 3200], time 1858.65s loss: 1.160, acc: 58.79%
+[8, 3400], time 1864.86s loss: 1.121, acc: 58.88%
+[8, 3600], time 1871.09s loss: 1.130, acc: 58.88%
+[8, 3800], time 1877.32s loss: 1.148, acc: 58.84%
+[8, 4000], time 1883.54s loss: 1.144, acc: 58.83%
+[8, 4200], time 1889.58s loss: 1.135, acc: 58.84%
+[8, 4400], time 1895.82s loss: 1.123, acc: 58.86%
+[8, 4600], time 1902.03s loss: 1.156, acc: 58.84%
+[8, 4800], time 1908.22s loss: 1.108, acc: 58.90%
+[8, 5000], time 1914.37s loss: 1.123, acc: 58.91%
+[8, 5200], time 1920.58s loss: 1.151, acc: 58.90%
+[8, 5400], time 1926.78s loss: 1.105, acc: 58.96%
+[8, 5600], time 1933.13s loss: 1.132, acc: 59.00%
+epoch 8 TRAIN error: 1.1404, acc: 0.5900
+epoch 8 VALIDATION error: 0.9810, acc: 0.6512
+[9, 200], time 1979.50s loss: 1.122, acc: 59.62%
+[9, 400], time 1985.57s loss: 1.127, acc: 59.41%
+[9, 600], time 1991.76s loss: 1.114, acc: 59.56%
+[9, 800], time 1997.91s loss: 1.129, acc: 59.57%
+[9, 1000], time 2003.89s loss: 1.102, acc: 59.70%
+[9, 1200], time 2010.04s loss: 1.096, acc: 59.82%
+[9, 1400], time 2016.27s loss: 1.093, acc: 59.84%
+[9, 1600], time 2022.65s loss: 1.116, acc: 59.78%
+[9, 1800], time 2028.98s loss: 1.137, acc: 59.73%
+[9, 2000], time 2035.21s loss: 1.100, acc: 59.84%
+[9, 2200], time 2041.41s loss: 1.114, acc: 59.78%
+[9, 2400], time 2047.85s loss: 1.111, acc: 59.79%
+[9, 2600], time 2054.22s loss: 1.108, acc: 59.84%
+[9, 2800], time 2060.43s loss: 1.114, acc: 59.88%
+[9, 3000], time 2066.64s loss: 1.115, acc: 59.88%
+[9, 3200], time 2073.01s loss: 1.102, acc: 59.90%
+[9, 3400], time 2079.12s loss: 1.115, acc: 59.92%
+[9, 3600], time 2085.52s loss: 1.099, acc: 59.92%
+[9, 3800], time 2091.69s loss: 1.094, acc: 59.92%
+[9, 4000], time 2098.03s loss: 1.091, acc: 59.98%
+[9, 4200], time 2104.33s loss: 1.087, acc: 60.03%
+[9, 4400], time 2110.75s loss: 1.128, acc: 60.00%
+[9, 4600], time 2117.05s loss: 1.107, acc: 60.04%
+[9, 4800], time 2123.42s loss: 1.080, acc: 60.10%
+[9, 5000], time 2129.73s loss: 1.070, acc: 60.18%
+[9, 5200], time 2136.18s loss: 1.063, acc: 60.25%
+[9, 5400], time 2142.55s loss: 1.102, acc: 60.30%
+[9, 5600], time 2148.90s loss: 1.077, acc: 60.33%
+epoch 9 TRAIN error: 1.1043, acc: 0.6032
+epoch 9 VALIDATION error: 1.0035, acc: 0.6520
+[10, 200], time 2196.85s loss: 1.071, acc: 61.50%
+[10, 400], time 2203.28s loss: 1.088, acc: 61.17%
+[10, 600], time 2209.52s loss: 1.073, acc: 61.26%
+[10, 800], time 2215.93s loss: 1.105, acc: 61.01%
+[10, 1000], time 2222.27s loss: 1.067, acc: 61.24%
+[10, 1200], time 2228.61s loss: 1.097, acc: 61.16%
+[10, 1400], time 2235.49s loss: 1.065, acc: 61.28%
+[10, 1600], time 2242.14s loss: 1.059, acc: 61.41%
+[10, 1800], time 2248.42s loss: 1.056, acc: 61.56%
+[10, 2000], time 2254.54s loss: 1.071, acc: 61.55%
+[10, 2200], time 2260.75s loss: 1.065, acc: 61.57%
+[10, 2400], time 2266.77s loss: 1.079, acc: 61.56%
+[10, 2600], time 2273.06s loss: 1.074, acc: 61.60%
+[10, 2800], time 2279.30s loss: 1.081, acc: 61.61%
+[10, 3000], time 2285.54s loss: 1.084, acc: 61.58%
+[10, 3200], time 2291.71s loss: 1.070, acc: 61.64%
+[10, 3400], time 2297.74s loss: 1.079, acc: 61.60%
+[10, 3600], time 2304.06s loss: 1.048, acc: 61.67%
+[10, 3800], time 2310.26s loss: 1.082, acc: 61.63%
+[10, 4000], time 2316.39s loss: 1.080, acc: 61.60%
+[10, 4200], time 2322.54s loss: 1.085, acc: 61.58%
+[10, 4400], time 2328.74s loss: 1.056, acc: 61.63%
+[10, 4600], time 2334.75s loss: 1.070, acc: 61.64%
+[10, 4800], time 2340.92s loss: 1.066, acc: 61.67%
+[10, 5000], time 2346.84s loss: 1.080, acc: 61.63%
+[10, 5200], time 2352.97s loss: 1.091, acc: 61.60%
+[10, 5400], time 2359.14s loss: 1.063, acc: 61.61%
+[10, 5600], time 2365.39s loss: 1.048, acc: 61.65%
+epoch 10 TRAIN error: 1.0732, acc: 0.6166
+epoch 10 VALIDATION error: 0.9511, acc: 0.6666
+[11, 200], time 2412.69s loss: 1.053, acc: 61.88%
+[11, 400], time 2418.95s loss: 1.051, acc: 61.75%
+[11, 600], time 2425.36s loss: 1.048, acc: 62.11%
+[11, 800], time 2431.76s loss: 1.049, acc: 62.16%
+[11, 1000], time 2437.86s loss: 1.061, acc: 62.15%
+[11, 1200], time 2444.32s loss: 1.042, acc: 62.13%
+[11, 1400], time 2450.77s loss: 1.015, acc: 62.37%
+[11, 1600], time 2457.15s loss: 1.054, acc: 62.36%
+[11, 1800], time 2463.27s loss: 1.054, acc: 62.35%
+[11, 2000], time 2469.67s loss: 1.035, acc: 62.44%
+[11, 2200], time 2476.00s loss: 1.062, acc: 62.43%
+[11, 2400], time 2482.43s loss: 1.048, acc: 62.42%
+[11, 2600], time 2488.67s loss: 1.038, acc: 62.43%
+[11, 2800], time 2495.08s loss: 1.037, acc: 62.47%
+[11, 3000], time 2501.39s loss: 1.043, acc: 62.51%
+[11, 3200], time 2507.66s loss: 1.029, acc: 62.58%
+[11, 3400], time 2514.02s loss: 1.028, acc: 62.64%
+[11, 3600], time 2520.37s loss: 1.053, acc: 62.64%
+[11, 3800], time 2526.60s loss: 1.041, acc: 62.64%
+[11, 4000], time 2533.09s loss: 1.043, acc: 62.63%
+[11, 4200], time 2539.46s loss: 1.049, acc: 62.63%
+[11, 4400], time 2545.85s loss: 1.059, acc: 62.62%
+[11, 4600], time 2552.22s loss: 1.046, acc: 62.61%
+[11, 4800], time 2558.53s loss: 1.024, acc: 62.64%
+[11, 5000], time 2564.87s loss: 1.035, acc: 62.66%
+[11, 5200], time 2571.24s loss: 1.032, acc: 62.66%
+[11, 5400], time 2577.53s loss: 1.023, acc: 62.67%
+[11, 5600], time 2583.76s loss: 1.029, acc: 62.69%
+epoch 11 TRAIN error: 1.0421, acc: 0.6270
+epoch 11 VALIDATION error: 0.9352, acc: 0.6762
+[12, 200], time 2630.95s loss: 1.021, acc: 63.16%
+[12, 400], time 2637.38s loss: 1.026, acc: 63.19%
+[12, 600], time 2643.73s loss: 1.029, acc: 63.03%
+[12, 800], time 2650.18s loss: 1.001, acc: 63.24%
+[12, 1000], time 2656.44s loss: 1.020, acc: 63.21%
+[12, 1200], time 2662.86s loss: 1.024, acc: 63.30%
+[12, 1400], time 2669.03s loss: 1.019, acc: 63.26%
+[12, 1600], time 2675.32s loss: 1.048, acc: 63.15%
+[12, 1800], time 2681.78s loss: 0.998, acc: 63.37%
+[12, 2000], time 2688.15s loss: 1.034, acc: 63.33%
+[12, 2200], time 2694.55s loss: 1.025, acc: 63.34%
+[12, 2400], time 2700.89s loss: 1.003, acc: 63.41%
+[12, 2600], time 2707.00s loss: 1.005, acc: 63.49%
+[12, 2800], time 2713.32s loss: 1.002, acc: 63.55%
+[12, 3000], time 2719.72s loss: 1.022, acc: 63.56%
+[12, 3200], time 2725.97s loss: 1.014, acc: 63.53%
+[12, 3400], time 2732.22s loss: 1.018, acc: 63.52%
+[12, 3600], time 2738.50s loss: 1.032, acc: 63.50%
+[12, 3800], time 2744.61s loss: 1.007, acc: 63.54%
+[12, 4000], time 2750.75s loss: 1.032, acc: 63.53%
+[12, 4200], time 2757.08s loss: 1.015, acc: 63.52%
+[12, 4400], time 2763.05s loss: 1.016, acc: 63.52%
+[12, 4600], time 2769.35s loss: 1.019, acc: 63.51%
+[12, 4800], time 2775.64s loss: 0.998, acc: 63.59%
+[12, 5000], time 2782.06s loss: 1.032, acc: 63.58%
+[12, 5200], time 2788.32s loss: 1.019, acc: 63.58%
+[12, 5400], time 2794.74s loss: 1.000, acc: 63.61%
+[12, 5600], time 2800.97s loss: 0.997, acc: 63.63%
+epoch 12 TRAIN error: 1.0168, acc: 0.6364
+epoch 12 VALIDATION error: 0.8988, acc: 0.6892
+[13, 200], time 2848.78s loss: 0.996, acc: 64.12%
+[13, 400], time 2855.24s loss: 0.995, acc: 64.23%
+[13, 600], time 2861.63s loss: 0.960, acc: 64.72%
+[13, 800], time 2868.07s loss: 0.989, acc: 64.71%
+[13, 1000], time 2874.49s loss: 0.996, acc: 64.63%
+[13, 1200], time 2880.82s loss: 1.007, acc: 64.48%
+[13, 1400], time 2887.14s loss: 1.002, acc: 64.47%
+[13, 1600], time 2893.41s loss: 1.025, acc: 64.35%
+[13, 1800], time 2899.68s loss: 1.015, acc: 64.26%
+[13, 2000], time 2905.85s loss: 0.987, acc: 64.29%
+[13, 2200], time 2912.01s loss: 0.976, acc: 64.35%
+[13, 2400], time 2918.36s loss: 0.997, acc: 64.41%
+[13, 2600], time 2924.64s loss: 0.998, acc: 64.42%
+[13, 2800], time 2930.83s loss: 0.998, acc: 64.40%
+[13, 3000], time 2937.03s loss: 1.014, acc: 64.35%
+[13, 3200], time 2943.41s loss: 1.017, acc: 64.34%
+[13, 3400], time 2949.52s loss: 1.007, acc: 64.31%
+[13, 3600], time 2955.79s loss: 0.979, acc: 64.37%
+[13, 3800], time 2961.90s loss: 0.980, acc: 64.41%
+[13, 4000], time 2968.22s loss: 0.993, acc: 64.45%
+[13, 4200], time 2974.30s loss: 0.997, acc: 64.44%
+[13, 4400], time 2980.47s loss: 1.008, acc: 64.38%
+[13, 4600], time 2986.76s loss: 0.992, acc: 64.39%
+[13, 4800], time 2993.03s loss: 0.973, acc: 64.43%
+[13, 5000], time 2999.20s loss: 0.997, acc: 64.44%
+[13, 5200], time 3005.34s loss: 0.989, acc: 64.46%
+[13, 5400], time 3011.64s loss: 1.005, acc: 64.42%
+[13, 5600], time 3017.79s loss: 0.987, acc: 64.42%
+epoch 13 TRAIN error: 0.9956, acc: 0.6442
+epoch 13 VALIDATION error: 0.8900, acc: 0.6897
+[14, 200], time 3064.77s loss: 0.972, acc: 65.77%
+[14, 400], time 3070.84s loss: 0.944, acc: 65.97%
+[14, 600], time 3077.11s loss: 0.971, acc: 65.72%
+[14, 800], time 3083.15s loss: 0.972, acc: 65.49%
+[14, 1000], time 3089.26s loss: 1.017, acc: 65.08%
+[14, 1200], time 3095.54s loss: 0.979, acc: 65.09%
+[14, 1400], time 3101.84s loss: 0.975, acc: 65.08%
+[14, 1600], time 3108.12s loss: 0.976, acc: 65.08%
+[14, 1800], time 3114.31s loss: 0.950, acc: 65.17%
+[14, 2000], time 3120.72s loss: 0.977, acc: 65.16%
+[14, 2200], time 3127.08s loss: 0.989, acc: 65.11%
+[14, 2400], time 3133.59s loss: 0.968, acc: 65.11%
+[14, 2600], time 3139.93s loss: 0.959, acc: 65.15%
+[14, 2800], time 3146.03s loss: 0.946, acc: 65.24%
+[14, 3000], time 3152.30s loss: 0.976, acc: 65.24%
+[14, 3200], time 3158.55s loss: 0.981, acc: 65.17%
+[14, 3400], time 3164.81s loss: 0.986, acc: 65.17%
+[14, 3600], time 3171.22s loss: 0.951, acc: 65.27%
+[14, 3800], time 3177.50s loss: 0.959, acc: 65.26%
+[14, 4000], time 3183.76s loss: 0.967, acc: 65.25%
+[14, 4200], time 3190.09s loss: 0.975, acc: 65.26%
+[14, 4400], time 3196.49s loss: 0.981, acc: 65.26%
+[14, 4600], time 3202.85s loss: 0.992, acc: 65.26%
+[14, 4800], time 3209.28s loss: 0.990, acc: 65.23%
+[14, 5000], time 3215.71s loss: 0.965, acc: 65.28%
+[14, 5200], time 3222.05s loss: 0.966, acc: 65.31%
+[14, 5400], time 3228.44s loss: 0.984, acc: 65.30%
+[14, 5600], time 3234.83s loss: 0.982, acc: 65.28%
+epoch 14 TRAIN error: 0.9730, acc: 0.6528
+epoch 14 VALIDATION error: 0.8981, acc: 0.6859
+[15, 200], time 3282.47s loss: 0.925, acc: 66.95%
+[15, 400], time 3288.93s loss: 0.941, acc: 66.67%
+[15, 600], time 3295.30s loss: 0.956, acc: 66.46%
+[15, 800], time 3301.71s loss: 0.943, acc: 66.59%
+[15, 1000], time 3308.11s loss: 0.951, acc: 66.68%
+[15, 1200], time 3314.52s loss: 0.933, acc: 66.63%
+[15, 1400], time 3320.97s loss: 0.995, acc: 66.39%
+[15, 1600], time 3327.27s loss: 0.969, acc: 66.26%
+[15, 1800], time 3333.66s loss: 0.956, acc: 66.19%
+[15, 2000], time 3340.03s loss: 0.947, acc: 66.24%
+[15, 2200], time 3346.44s loss: 0.948, acc: 66.26%
+[15, 2400], time 3352.85s loss: 0.969, acc: 66.20%
+[15, 2600], time 3359.16s loss: 0.971, acc: 66.15%
+[15, 2800], time 3365.26s loss: 0.944, acc: 66.18%
+[15, 3000], time 3371.34s loss: 0.950, acc: 66.20%
+[15, 3200], time 3377.72s loss: 0.956, acc: 66.18%
+[15, 3400], time 3384.02s loss: 0.967, acc: 66.13%
+[15, 3600], time 3390.27s loss: 0.945, acc: 66.16%
+[15, 3800], time 3396.53s loss: 0.952, acc: 66.14%
+[15, 4000], time 3402.76s loss: 0.962, acc: 66.12%
+[15, 4200], time 3409.11s loss: 0.963, acc: 66.09%
+[15, 4400], time 3415.33s loss: 0.991, acc: 66.03%
+[15, 4600], time 3421.71s loss: 0.953, acc: 66.04%
+[15, 4800], time 3427.79s loss: 0.974, acc: 65.99%
+[15, 5000], time 3434.21s loss: 0.935, acc: 66.02%
+[15, 5200], time 3440.39s loss: 0.961, acc: 65.99%
+[15, 5400], time 3446.63s loss: 0.954, acc: 65.97%
+[15, 5600], time 3452.91s loss: 0.933, acc: 66.01%
+epoch 15 TRAIN error: 0.9554, acc: 0.6600
+epoch 15 VALIDATION error: 0.8627, acc: 0.6999
+[16, 200], time 3500.54s loss: 0.933, acc: 66.55%
+[16, 400], time 3506.85s loss: 0.954, acc: 66.34%
+[16, 600], time 3513.00s loss: 0.937, acc: 66.72%
+[16, 800], time 3519.24s loss: 0.970, acc: 66.46%
+[16, 1000], time 3525.38s loss: 0.925, acc: 66.49%
+[16, 1200], time 3531.61s loss: 0.935, acc: 66.63%
+[16, 1400], time 3538.04s loss: 0.938, acc: 66.70%
+[16, 1600], time 3544.46s loss: 0.914, acc: 66.77%
+[16, 1800], time 3550.83s loss: 0.914, acc: 66.87%
+[16, 2000], time 3557.27s loss: 0.935, acc: 66.86%
+[16, 2200], time 3563.61s loss: 0.942, acc: 66.85%
+[16, 2400], time 3569.88s loss: 0.934, acc: 66.84%
+[16, 2600], time 3576.31s loss: 0.954, acc: 66.80%
+[16, 2800], time 3582.66s loss: 0.932, acc: 66.78%
+[16, 3000], time 3589.06s loss: 0.944, acc: 66.77%
+[16, 3200], time 3595.47s loss: 0.955, acc: 66.72%
+[16, 3400], time 3601.84s loss: 0.954, acc: 66.65%
+[16, 3600], time 3608.23s loss: 0.955, acc: 66.62%
+[16, 3800], time 3614.61s loss: 0.948, acc: 66.60%
+[16, 4000], time 3621.03s loss: 0.958, acc: 66.56%
+[16, 4200], time 3627.27s loss: 0.963, acc: 66.50%
+[16, 4400], time 3633.56s loss: 0.937, acc: 66.48%
+[16, 4600], time 3639.89s loss: 0.948, acc: 66.47%
+[16, 4800], time 3646.20s loss: 0.889, acc: 66.55%
+[16, 5000], time 3652.46s loss: 0.924, acc: 66.57%
+[16, 5200], time 3658.71s loss: 0.947, acc: 66.58%
+[16, 5400], time 3664.99s loss: 0.950, acc: 66.55%
+[16, 5600], time 3671.34s loss: 0.923, acc: 66.58%
+epoch 16 TRAIN error: 0.9396, acc: 0.6659
+epoch 16 VALIDATION error: 0.8813, acc: 0.6932
+[17, 200], time 3718.45s loss: 0.918, acc: 66.94%
+[17, 400], time 3724.74s loss: 0.919, acc: 67.20%
+[17, 600], time 3731.06s loss: 0.922, acc: 67.30%
+[17, 800], time 3737.67s loss: 0.897, acc: 67.37%
+[17, 1000], time 3743.98s loss: 0.918, acc: 67.34%
+[17, 1200], time 3750.21s loss: 0.936, acc: 67.26%
+[17, 1400], time 3756.43s loss: 0.921, acc: 67.21%
+[17, 1600], time 3762.65s loss: 0.936, acc: 67.12%
+[17, 1800], time 3768.88s loss: 0.931, acc: 67.10%
+[17, 2000], time 3775.18s loss: 0.932, acc: 67.05%
+[17, 2200], time 3781.50s loss: 0.925, acc: 67.12%
+[17, 2400], time 3787.82s loss: 0.927, acc: 67.12%
+[17, 2600], time 3794.18s loss: 0.919, acc: 67.10%
+[17, 2800], time 3800.35s loss: 0.915, acc: 67.16%
+[17, 3000], time 3806.48s loss: 0.914, acc: 67.14%
+[17, 3200], time 3812.70s loss: 0.942, acc: 67.09%
+[17, 3400], time 3818.99s loss: 0.931, acc: 67.06%
+[17, 3600], time 3825.15s loss: 0.907, acc: 67.11%
+[17, 3800], time 3831.27s loss: 0.909, acc: 67.12%
+[17, 4000], time 3837.31s loss: 0.912, acc: 67.14%
+[17, 4200], time 3843.42s loss: 0.923, acc: 67.17%
+[17, 4400], time 3849.49s loss: 0.921, acc: 67.15%
+[17, 4600], time 3855.71s loss: 0.924, acc: 67.16%
+[17, 4800], time 3861.97s loss: 0.911, acc: 67.18%
+[17, 5000], time 3868.31s loss: 0.930, acc: 67.17%
+[17, 5200], time 3874.49s loss: 0.909, acc: 67.19%
+[17, 5400], time 3880.86s loss: 0.928, acc: 67.22%
+[17, 5600], time 3887.08s loss: 0.925, acc: 67.22%
+epoch 17 TRAIN error: 0.9215, acc: 0.6722
+epoch 17 VALIDATION error: 0.8927, acc: 0.6953
+[18, 200], time 3934.47s loss: 0.921, acc: 66.66%
+[18, 400], time 3940.80s loss: 0.890, acc: 67.56%
+[18, 600], time 3947.02s loss: 0.896, acc: 67.81%
+[18, 800], time 3953.31s loss: 0.893, acc: 67.96%
+[18, 1000], time 3959.66s loss: 0.901, acc: 68.02%
+[18, 1200], time 3966.03s loss: 0.911, acc: 67.77%
+[18, 1400], time 3972.29s loss: 0.917, acc: 67.73%
+[18, 1600], time 3978.49s loss: 0.892, acc: 67.70%
+[18, 1800], time 3984.64s loss: 0.915, acc: 67.67%
+[18, 2000], time 3990.81s loss: 0.889, acc: 67.73%
+[18, 2200], time 3996.99s loss: 0.937, acc: 67.62%
+[18, 2400], time 4003.17s loss: 0.911, acc: 67.61%
+[18, 2600], time 4009.42s loss: 0.911, acc: 67.63%
+[18, 2800], time 4015.53s loss: 0.920, acc: 67.62%
+[18, 3000], time 4021.66s loss: 0.894, acc: 67.65%
+[18, 3200], time 4027.85s loss: 0.924, acc: 67.63%
+[18, 3400], time 4034.19s loss: 0.903, acc: 67.67%
+[18, 3600], time 4040.38s loss: 0.901, acc: 67.66%
+[18, 3800], time 4046.48s loss: 0.902, acc: 67.67%
+[18, 4000], time 4052.61s loss: 0.901, acc: 67.65%
+[18, 4200], time 4058.84s loss: 0.924, acc: 67.66%
+[18, 4400], time 4064.89s loss: 0.934, acc: 67.61%
+[18, 4600], time 4071.12s loss: 0.918, acc: 67.63%
+[18, 4800], time 4077.37s loss: 0.884, acc: 67.69%
+[18, 5000], time 4083.52s loss: 0.912, acc: 67.65%
+[18, 5200], time 4089.74s loss: 0.918, acc: 67.60%
+[18, 5400], time 4096.01s loss: 0.900, acc: 67.63%
+[18, 5600], time 4102.25s loss: 0.895, acc: 67.67%
+epoch 18 TRAIN error: 0.9078, acc: 0.6766
+epoch 18 VALIDATION error: 0.8467, acc: 0.7060
+[19, 200], time 4149.35s loss: 0.907, acc: 67.83%
+[19, 400], time 4155.43s loss: 0.896, acc: 67.80%
+[19, 600], time 4161.51s loss: 0.893, acc: 67.90%
+[19, 800], time 4167.66s loss: 0.891, acc: 68.02%
+[19, 1000], time 4173.82s loss: 0.901, acc: 68.00%
+[19, 1200], time 4180.16s loss: 0.896, acc: 67.94%
+[19, 1400], time 4186.44s loss: 0.877, acc: 68.06%
+[19, 1600], time 4192.77s loss: 0.899, acc: 68.04%
+[19, 1800], time 4198.60s loss: 0.890, acc: 68.05%
+[19, 2000], time 4205.02s loss: 0.903, acc: 67.99%
+[19, 2200], time 4211.44s loss: 0.900, acc: 67.89%
+[19, 2400], time 4217.64s loss: 0.907, acc: 67.88%
+[19, 2600], time 4224.02s loss: 0.910, acc: 67.88%
+[19, 2800], time 4230.29s loss: 0.875, acc: 67.97%
+[19, 3000], time 4236.53s loss: 0.895, acc: 67.97%
+[19, 3200], time 4242.70s loss: 0.886, acc: 67.99%
+[19, 3400], time 4249.11s loss: 0.886, acc: 68.02%
+[19, 3600], time 4255.33s loss: 0.885, acc: 68.03%
+[19, 3800], time 4261.67s loss: 0.887, acc: 68.03%
+[19, 4000], time 4268.02s loss: 0.922, acc: 68.02%
+[19, 4200], time 4274.44s loss: 0.894, acc: 68.07%
+[19, 4400], time 4280.74s loss: 0.899, acc: 68.07%
+[19, 4600], time 4287.02s loss: 0.894, acc: 68.06%
+[19, 4800], time 4293.44s loss: 0.904, acc: 68.06%
+[19, 5000], time 4299.92s loss: 0.901, acc: 68.04%
+[19, 5200], time 4306.27s loss: 0.902, acc: 68.04%
+[19, 5400], time 4312.61s loss: 0.901, acc: 68.01%
+[19, 5600], time 4318.95s loss: 0.898, acc: 68.04%
+epoch 19 TRAIN error: 0.8961, acc: 0.6804
+epoch 19 VALIDATION error: 0.8404, acc: 0.7076
+[20, 200], time 4366.96s loss: 0.865, acc: 68.48%
+[20, 400], time 4373.41s loss: 0.879, acc: 68.62%
+[20, 600], time 4379.83s loss: 0.873, acc: 68.62%
+[20, 800], time 4386.11s loss: 0.875, acc: 68.67%
+[20, 1000], time 4392.37s loss: 0.879, acc: 68.66%
+[20, 1200], time 4398.54s loss: 0.865, acc: 68.80%
+[20, 1400], time 4404.79s loss: 0.874, acc: 68.77%
+[20, 1600], time 4411.05s loss: 0.889, acc: 68.66%
+[20, 1800], time 4417.26s loss: 0.873, acc: 68.66%
+[20, 2000], time 4423.52s loss: 0.896, acc: 68.64%
+[20, 2200], time 4429.76s loss: 0.887, acc: 68.62%
+[20, 2400], time 4435.93s loss: 0.894, acc: 68.57%
+[20, 2600], time 4442.20s loss: 0.904, acc: 68.51%
+[20, 2800], time 4448.41s loss: 0.895, acc: 68.55%
+[20, 3000], time 4454.54s loss: 0.909, acc: 68.52%
+[20, 3200], time 4460.86s loss: 0.927, acc: 68.42%
+[20, 3400], time 4467.04s loss: 0.877, acc: 68.44%
+[20, 3600], time 4473.28s loss: 0.892, acc: 68.40%
+[20, 3800], time 4479.42s loss: 0.892, acc: 68.43%
+[20, 4000], time 4485.75s loss: 0.906, acc: 68.42%
+[20, 4200], time 4491.85s loss: 0.888, acc: 68.42%
+[20, 4400], time 4498.11s loss: 0.890, acc: 68.45%
+[20, 4600], time 4504.19s loss: 0.866, acc: 68.50%
+[20, 4800], time 4510.31s loss: 0.894, acc: 68.49%
+[20, 5000], time 4516.47s loss: 0.886, acc: 68.51%
+[20, 5200], time 4522.69s loss: 0.867, acc: 68.55%
+[20, 5400], time 4528.92s loss: 0.882, acc: 68.54%
+[20, 5600], time 4535.29s loss: 0.903, acc: 68.50%
+epoch 20 TRAIN error: 0.8867, acc: 0.6850
+epoch 20 VALIDATION error: 0.8172, acc: 0.7166
+[21, 200], time 4583.35s loss: 0.859, acc: 69.39%
+[21, 400], time 4589.73s loss: 0.850, acc: 69.79%
+[21, 600], time 4595.91s loss: 0.877, acc: 69.34%
+[21, 800], time 4601.99s loss: 0.888, acc: 69.23%
+[21, 1000], time 4608.29s loss: 0.871, acc: 69.15%
+[21, 1200], time 4614.53s loss: 0.891, acc: 69.04%
+[21, 1400], time 4620.69s loss: 0.856, acc: 69.14%
+[21, 1600], time 4626.92s loss: 0.886, acc: 69.06%
+[21, 1800], time 4633.30s loss: 0.878, acc: 68.97%
+[21, 2000], time 4639.47s loss: 0.873, acc: 68.98%
+[21, 2200], time 4645.68s loss: 0.870, acc: 69.00%
+[21, 2400], time 4651.91s loss: 0.887, acc: 68.95%
+[21, 2600], time 4657.99s loss: 0.873, acc: 68.94%
+[21, 2800], time 4664.21s loss: 0.871, acc: 68.92%
+[21, 3000], time 4670.44s loss: 0.856, acc: 68.96%
+[21, 3200], time 4676.42s loss: 0.873, acc: 68.95%
+[21, 3400], time 4682.62s loss: 0.876, acc: 68.96%
+[21, 3600], time 4688.78s loss: 0.874, acc: 68.99%
+[21, 3800], time 4695.02s loss: 0.861, acc: 68.99%
+[21, 4000], time 4701.22s loss: 0.883, acc: 68.97%
+[21, 4200], time 4707.55s loss: 0.859, acc: 69.01%
+[21, 4400], time 4713.81s loss: 0.868, acc: 69.02%
+[21, 4600], time 4720.00s loss: 0.897, acc: 69.00%
+[21, 4800], time 4726.23s loss: 0.870, acc: 68.98%
+[21, 5000], time 4732.37s loss: 0.845, acc: 69.01%
+[21, 5200], time 4738.51s loss: 0.862, acc: 69.02%
+[21, 5400], time 4744.77s loss: 0.868, acc: 69.02%
+[21, 5600], time 4750.94s loss: 0.841, acc: 69.05%
+epoch 21 TRAIN error: 0.8700, acc: 0.6905
+epoch 21 VALIDATION error: 0.8530, acc: 0.7085
+[22, 200], time 4798.32s loss: 0.832, acc: 70.12%
+[22, 400], time 4804.61s loss: 0.854, acc: 69.95%
+[22, 600], time 4810.69s loss: 0.855, acc: 69.89%
+[22, 800], time 4817.11s loss: 0.853, acc: 69.84%
+[22, 1000], time 4823.24s loss: 0.851, acc: 69.92%
+[22, 1200], time 4829.58s loss: 0.869, acc: 69.82%
+[22, 1400], time 4835.79s loss: 0.886, acc: 69.63%
+[22, 1600], time 4842.06s loss: 0.842, acc: 69.67%
+[22, 1800], time 4848.09s loss: 0.849, acc: 69.66%
+[22, 2000], time 4854.25s loss: 0.879, acc: 69.59%
+[22, 2200], time 4860.39s loss: 0.842, acc: 69.59%
+[22, 2400], time 4866.51s loss: 0.858, acc: 69.64%
+[22, 2600], time 4872.46s loss: 0.861, acc: 69.64%
+[22, 2800], time 4878.57s loss: 0.866, acc: 69.65%
+[22, 3000], time 4884.87s loss: 0.858, acc: 69.62%
+[22, 3200], time 4890.99s loss: 0.864, acc: 69.61%
+[22, 3400], time 4897.20s loss: 0.860, acc: 69.62%
+[22, 3600], time 4903.26s loss: 0.893, acc: 69.54%
+[22, 3800], time 4909.53s loss: 0.882, acc: 69.48%
+[22, 4000], time 4915.67s loss: 0.854, acc: 69.50%
+[22, 4200], time 4921.59s loss: 0.851, acc: 69.51%
+[22, 4400], time 4927.80s loss: 0.887, acc: 69.47%
+[22, 4600], time 4934.08s loss: 0.884, acc: 69.42%
+[22, 4800], time 4940.28s loss: 0.891, acc: 69.38%
+[22, 5000], time 4946.57s loss: 0.866, acc: 69.36%
+[22, 5200], time 4952.70s loss: 0.851, acc: 69.38%
+[22, 5400], time 4958.84s loss: 0.877, acc: 69.38%
+[22, 5600], time 4965.10s loss: 0.835, acc: 69.40%
+epoch 22 TRAIN error: 0.8625, acc: 0.6940
+epoch 22 VALIDATION error: 0.8054, acc: 0.7202
+[23, 200], time 5011.97s loss: 0.817, acc: 70.98%
+[23, 400], time 5018.27s loss: 0.825, acc: 70.88%
+[23, 600], time 5024.50s loss: 0.853, acc: 70.55%
+[23, 800], time 5030.86s loss: 0.855, acc: 70.24%
+[23, 1000], time 5037.20s loss: 0.846, acc: 70.09%
+[23, 1200], time 5043.48s loss: 0.862, acc: 69.89%
+[23, 1400], time 5049.74s loss: 0.843, acc: 69.94%
+[23, 1600], time 5056.08s loss: 0.851, acc: 69.90%
+[23, 1800], time 5062.36s loss: 0.835, acc: 69.96%
+[23, 2000], time 5068.75s loss: 0.836, acc: 70.03%
+[23, 2200], time 5074.97s loss: 0.853, acc: 69.93%
+[23, 2400], time 5081.31s loss: 0.857, acc: 69.90%
+[23, 2600], time 5087.64s loss: 0.847, acc: 69.91%
+[23, 2800], time 5093.76s loss: 0.844, acc: 69.90%
+[23, 3000], time 5100.06s loss: 0.846, acc: 69.89%
+[23, 3200], time 5106.33s loss: 0.842, acc: 69.93%
+[23, 3400], time 5112.53s loss: 0.843, acc: 69.96%
+[23, 3600], time 5118.73s loss: 0.857, acc: 69.92%
+[23, 3800], time 5124.97s loss: 0.868, acc: 69.87%
+[23, 4000], time 5131.17s loss: 0.849, acc: 69.87%
+[23, 4200], time 5137.37s loss: 0.863, acc: 69.86%
+[23, 4400], time 5143.45s loss: 0.854, acc: 69.85%
+[23, 4600], time 5149.56s loss: 0.847, acc: 69.84%
+[23, 4800], time 5155.57s loss: 0.881, acc: 69.79%
+[23, 5000], time 5161.86s loss: 0.895, acc: 69.73%
+[23, 5200], time 5168.04s loss: 0.859, acc: 69.71%
+[23, 5400], time 5174.21s loss: 0.874, acc: 69.67%
+[23, 5600], time 5180.33s loss: 0.865, acc: 69.66%
+epoch 23 TRAIN error: 0.8523, acc: 0.6966
+epoch 23 VALIDATION error: 0.8114, acc: 0.7221
+[24, 200], time 5234.31s loss: 0.829, acc: 70.75%
+[24, 400], time 5240.55s loss: 0.823, acc: 70.49%
+[24, 600], time 5246.89s loss: 0.855, acc: 70.17%
+[24, 800], time 5253.26s loss: 0.823, acc: 70.43%
+[24, 1000], time 5259.63s loss: 0.838, acc: 70.33%
+[24, 1200], time 5266.03s loss: 0.833, acc: 70.21%
+[24, 1400], time 5272.50s loss: 0.852, acc: 70.16%
+[24, 1600], time 5278.76s loss: 0.846, acc: 70.09%
+[24, 1800], time 5285.00s loss: 0.856, acc: 70.01%
+[24, 2000], time 5291.19s loss: 0.827, acc: 70.07%
+[24, 2200], time 5297.50s loss: 0.860, acc: 70.05%
+[24, 2400], time 5303.70s loss: 0.851, acc: 70.01%
+[24, 2600], time 5310.00s loss: 0.848, acc: 69.98%
+[24, 2800], time 5316.34s loss: 0.856, acc: 69.94%
+[24, 3000], time 5322.59s loss: 0.837, acc: 69.95%
+[24, 3200], time 5328.78s loss: 0.824, acc: 70.03%
+[24, 3400], time 5335.03s loss: 0.851, acc: 70.00%
+[24, 3600], time 5341.23s loss: 0.822, acc: 70.06%
+[24, 3800], time 5347.49s loss: 0.837, acc: 70.07%
+[24, 4000], time 5353.64s loss: 0.837, acc: 70.07%
+[24, 4200], time 5359.87s loss: 0.843, acc: 70.09%
+[24, 4400], time 5366.11s loss: 0.849, acc: 70.08%
+[24, 4600], time 5372.47s loss: 0.858, acc: 70.04%
+[24, 4800], time 5378.63s loss: 0.864, acc: 70.00%
+[24, 5000], time 5384.85s loss: 0.846, acc: 70.00%
+[24, 5200], time 5391.22s loss: 0.855, acc: 70.00%
+[24, 5400], time 5397.46s loss: 0.842, acc: 70.01%
+[24, 5600], time 5403.77s loss: 0.850, acc: 70.02%
+epoch 24 TRAIN error: 0.8436, acc: 0.7001
+epoch 24 VALIDATION error: 0.8145, acc: 0.7230
+[25, 200], time 5450.53s loss: 0.801, acc: 72.11%
+[25, 400], time 5456.69s loss: 0.837, acc: 71.04%
+[25, 600], time 5462.99s loss: 0.847, acc: 70.49%
+[25, 800], time 5469.22s loss: 0.820, acc: 70.61%
+[25, 1000], time 5475.38s loss: 0.820, acc: 70.54%
+[25, 1200], time 5481.53s loss: 0.841, acc: 70.48%
+[25, 1400], time 5487.68s loss: 0.840, acc: 70.38%
+[25, 1600], time 5493.84s loss: 0.802, acc: 70.58%
+[25, 1800], time 5499.96s loss: 0.836, acc: 70.54%
+[25, 2000], time 5506.04s loss: 0.838, acc: 70.47%
+[25, 2200], time 5512.31s loss: 0.830, acc: 70.48%
+[25, 2400], time 5518.44s loss: 0.832, acc: 70.49%
+[25, 2600], time 5524.80s loss: 0.847, acc: 70.47%
+[25, 2800], time 5531.27s loss: 0.824, acc: 70.48%
+[25, 3000], time 5537.51s loss: 0.852, acc: 70.43%
+[25, 3200], time 5543.81s loss: 0.831, acc: 70.48%
+[25, 3400], time 5549.93s loss: 0.862, acc: 70.41%
+[25, 3600], time 5556.35s loss: 0.849, acc: 70.36%
+[25, 3800], time 5562.34s loss: 0.826, acc: 70.39%
+[25, 4000], time 5568.71s loss: 0.854, acc: 70.35%
+[25, 4200], time 5575.17s loss: 0.824, acc: 70.38%
+[25, 4400], time 5581.34s loss: 0.852, acc: 70.35%
+[25, 4600], time 5587.52s loss: 0.842, acc: 70.33%
+[25, 4800], time 5593.82s loss: 0.846, acc: 70.30%
+[25, 5000], time 5600.14s loss: 0.858, acc: 70.28%
+[25, 5200], time 5606.45s loss: 0.830, acc: 70.32%
+[25, 5400], time 5612.58s loss: 0.827, acc: 70.35%
+[25, 5600], time 5618.88s loss: 0.831, acc: 70.35%
+epoch 25 TRAIN error: 0.8357, acc: 0.7034
+epoch 25 VALIDATION error: 0.7883, acc: 0.7315
+[26, 200], time 5665.94s loss: 0.835, acc: 69.81%
+[26, 400], time 5671.94s loss: 0.827, acc: 70.60%
+[26, 600], time 5678.27s loss: 0.823, acc: 70.80%
+[26, 800], time 5684.44s loss: 0.807, acc: 70.99%
+[26, 1000], time 5690.57s loss: 0.823, acc: 70.97%
+[26, 1200], time 5696.89s loss: 0.824, acc: 70.94%
+[26, 1400], time 5703.09s loss: 0.810, acc: 70.92%
+[26, 1600], time 5709.41s loss: 0.823, acc: 70.94%
+[26, 1800], time 5715.73s loss: 0.837, acc: 70.90%
+[26, 2000], time 5721.97s loss: 0.833, acc: 70.89%
+[26, 2200], time 5728.38s loss: 0.816, acc: 70.95%
+[26, 2400], time 5734.74s loss: 0.835, acc: 70.91%
+[26, 2600], time 5741.20s loss: 0.835, acc: 70.88%
+[26, 2800], time 5747.51s loss: 0.831, acc: 70.85%
+[26, 3000], time 5753.88s loss: 0.851, acc: 70.75%
+[26, 3200], time 5760.24s loss: 0.821, acc: 70.75%
+[26, 3400], time 5766.49s loss: 0.826, acc: 70.72%
+[26, 3600], time 5772.83s loss: 0.823, acc: 70.71%
+[26, 3800], time 5779.12s loss: 0.800, acc: 70.78%
+[26, 4000], time 5785.40s loss: 0.845, acc: 70.74%
+[26, 4200], time 5791.83s loss: 0.846, acc: 70.73%
+[26, 4400], time 5798.09s loss: 0.841, acc: 70.71%
+[26, 4600], time 5804.46s loss: 0.820, acc: 70.71%
+[26, 4800], time 5810.75s loss: 0.826, acc: 70.71%
+[26, 5000], time 5816.98s loss: 0.838, acc: 70.69%
+[26, 5200], time 5823.23s loss: 0.819, acc: 70.70%
+[26, 5400], time 5829.60s loss: 0.832, acc: 70.68%
+[26, 5600], time 5836.01s loss: 0.841, acc: 70.65%
+epoch 26 TRAIN error: 0.8282, acc: 0.7065
+epoch 26 VALIDATION error: 0.8075, acc: 0.7236
+[27, 200], time 5883.50s loss: 0.816, acc: 71.19%
+[27, 400], time 5889.88s loss: 0.814, acc: 71.56%
+[27, 600], time 5896.22s loss: 0.842, acc: 71.10%
+[27, 800], time 5902.41s loss: 0.816, acc: 71.16%
+[27, 1000], time 5908.58s loss: 0.817, acc: 71.20%
+[27, 1200], time 5914.86s loss: 0.828, acc: 71.14%
+[27, 1400], time 5921.11s loss: 0.815, acc: 71.08%
+[27, 1600], time 5927.34s loss: 0.820, acc: 71.02%
+[27, 1800], time 5933.60s loss: 0.825, acc: 70.95%
+[27, 2000], time 5939.84s loss: 0.816, acc: 70.98%
+[27, 2200], time 5946.12s loss: 0.820, acc: 70.95%
+[27, 2400], time 5952.30s loss: 0.831, acc: 70.91%
+[27, 2600], time 5958.13s loss: 0.833, acc: 70.89%
+[27, 2800], time 5964.12s loss: 0.825, acc: 70.91%
+[27, 3000], time 5970.32s loss: 0.801, acc: 70.96%
+[27, 3200], time 5976.56s loss: 0.800, acc: 71.03%
+[27, 3400], time 5982.73s loss: 0.819, acc: 71.02%
+[27, 3600], time 5989.05s loss: 0.817, acc: 71.04%
+[27, 3800], time 5995.26s loss: 0.808, acc: 71.04%
+[27, 4000], time 6001.41s loss: 0.837, acc: 71.00%
+[27, 4200], time 6007.67s loss: 0.810, acc: 71.03%
+[27, 4400], time 6013.80s loss: 0.810, acc: 71.06%
+[27, 4600], time 6020.09s loss: 0.823, acc: 71.03%
+[27, 4800], time 6026.32s loss: 0.825, acc: 71.01%
+[27, 5000], time 6032.39s loss: 0.839, acc: 71.00%
+[27, 5200], time 6038.63s loss: 0.811, acc: 71.03%
+[27, 5400], time 6044.61s loss: 0.831, acc: 71.03%
+[27, 5600], time 6050.82s loss: 0.840, acc: 71.00%
+epoch 27 TRAIN error: 0.8209, acc: 0.7101
+epoch 27 VALIDATION error: 0.8073, acc: 0.7245
+[28, 200], time 6097.95s loss: 0.800, acc: 71.97%
+[28, 400], time 6104.34s loss: 0.802, acc: 71.45%
+[28, 600], time 6110.76s loss: 0.811, acc: 71.29%
+[28, 800], time 6117.12s loss: 0.797, acc: 71.47%
+[28, 1000], time 6123.44s loss: 0.816, acc: 71.50%
+[28, 1200], time 6129.68s loss: 0.827, acc: 71.41%
+[28, 1400], time 6135.91s loss: 0.818, acc: 71.29%
+[28, 1600], time 6142.14s loss: 0.816, acc: 71.30%
+[28, 1800], time 6148.42s loss: 0.839, acc: 71.18%
+[28, 2000], time 6154.75s loss: 0.804, acc: 71.13%
+[28, 2200], time 6160.91s loss: 0.809, acc: 71.18%
+[28, 2400], time 6167.07s loss: 0.805, acc: 71.20%
+[28, 2600], time 6173.34s loss: 0.827, acc: 71.18%
+[28, 2800], time 6179.48s loss: 0.797, acc: 71.22%
+[28, 3000], time 6185.72s loss: 0.829, acc: 71.16%
+[28, 3200], time 6192.01s loss: 0.817, acc: 71.18%
+[28, 3400], time 6198.23s loss: 0.835, acc: 71.13%
+[28, 3600], time 6204.24s loss: 0.791, acc: 71.17%
+[28, 3800], time 6210.41s loss: 0.838, acc: 71.12%
+[28, 4000], time 6216.76s loss: 0.816, acc: 71.12%
+[28, 4200], time 6222.97s loss: 0.810, acc: 71.15%
+[28, 4400], time 6229.12s loss: 0.820, acc: 71.13%
+[28, 4600], time 6235.38s loss: 0.812, acc: 71.13%
+[28, 4800], time 6241.54s loss: 0.827, acc: 71.10%
+[28, 5000], time 6247.68s loss: 0.818, acc: 71.09%
+[28, 5200], time 6253.95s loss: 0.791, acc: 71.13%
+[28, 5400], time 6260.11s loss: 0.846, acc: 71.09%
+[28, 5600], time 6266.03s loss: 0.817, acc: 71.08%
+epoch 28 TRAIN error: 0.8156, acc: 0.7108
+epoch 28 VALIDATION error: 0.8225, acc: 0.7195
+[29, 200], time 6312.53s loss: 0.775, acc: 72.52%
+[29, 400], time 6318.61s loss: 0.779, acc: 72.47%
+[29, 600], time 6324.70s loss: 0.794, acc: 72.42%
+[29, 800], time 6330.79s loss: 0.790, acc: 72.30%
+[29, 1000], time 6337.01s loss: 0.804, acc: 72.11%
+[29, 1200], time 6343.34s loss: 0.812, acc: 71.91%
+[29, 1400], time 6349.50s loss: 0.807, acc: 71.88%
+[29, 1600], time 6355.66s loss: 0.810, acc: 71.86%
+[29, 1800], time 6361.72s loss: 0.796, acc: 71.90%
+[29, 2000], time 6368.05s loss: 0.825, acc: 71.79%
+[29, 2200], time 6374.44s loss: 0.812, acc: 71.70%
+[29, 2400], time 6380.52s loss: 0.823, acc: 71.60%
+[29, 2600], time 6386.87s loss: 0.821, acc: 71.57%
+[29, 2800], time 6393.15s loss: 0.815, acc: 71.55%
+[29, 3000], time 6399.31s loss: 0.827, acc: 71.48%
+[29, 3200], time 6405.44s loss: 0.814, acc: 71.41%
+[29, 3400], time 6411.72s loss: 0.785, acc: 71.44%
+[29, 3600], time 6418.04s loss: 0.814, acc: 71.43%
+[29, 3800], time 6424.38s loss: 0.800, acc: 71.44%
+[29, 4000], time 6430.69s loss: 0.831, acc: 71.41%
+[29, 4200], time 6437.98s loss: 0.827, acc: 71.39%
+[29, 4400], time 6444.59s loss: 0.824, acc: 71.37%
+[29, 4600], time 6450.96s loss: 0.810, acc: 71.38%
+[29, 4800], time 6457.21s loss: 0.780, acc: 71.42%
+[29, 5000], time 6463.56s loss: 0.808, acc: 71.38%
+[29, 5200], time 6469.89s loss: 0.834, acc: 71.34%
+[29, 5400], time 6476.27s loss: 0.800, acc: 71.35%
+[29, 5600], time 6482.57s loss: 0.834, acc: 71.31%
+epoch 29 TRAIN error: 0.8091, acc: 0.7130
+epoch 29 VALIDATION error: 0.8452, acc: 0.7143
+[30, 200], time 6529.85s loss: 0.785, acc: 71.34%
+[30, 400], time 6536.10s loss: 0.800, acc: 71.64%
+[30, 600], time 6542.35s loss: 0.765, acc: 72.06%
+[30, 800], time 6548.69s loss: 0.817, acc: 71.74%
+[30, 1000], time 6555.07s loss: 0.782, acc: 71.76%
+[30, 1200], time 6561.38s loss: 0.822, acc: 71.67%
+[30, 1400], time 6567.72s loss: 0.823, acc: 71.62%
+[30, 1600], time 6573.98s loss: 0.784, acc: 71.69%
+[30, 1800], time 6580.26s loss: 0.794, acc: 71.69%
+[30, 2000], time 6586.36s loss: 0.817, acc: 71.62%
+[30, 2200], time 6592.65s loss: 0.786, acc: 71.66%
+[30, 2400], time 6598.84s loss: 0.793, acc: 71.68%
+[30, 2600], time 6605.21s loss: 0.790, acc: 71.69%
+[30, 2800], time 6611.38s loss: 0.810, acc: 71.65%
+[30, 3000], time 6617.65s loss: 0.805, acc: 71.67%
+[30, 3200], time 6624.00s loss: 0.804, acc: 71.64%
+[30, 3400], time 6630.21s loss: 0.818, acc: 71.61%
+[30, 3600], time 6636.44s loss: 0.803, acc: 71.59%
+[30, 3800], time 6642.74s loss: 0.809, acc: 71.56%
+[30, 4000], time 6649.07s loss: 0.825, acc: 71.53%
+[30, 4200], time 6655.28s loss: 0.819, acc: 71.53%
+[30, 4400], time 6661.23s loss: 0.808, acc: 71.52%
+[30, 4600], time 6667.61s loss: 0.799, acc: 71.54%
+[30, 4800], time 6673.80s loss: 0.818, acc: 71.52%
+[30, 5000], time 6680.14s loss: 0.806, acc: 71.52%
+[30, 5200], time 6686.34s loss: 0.818, acc: 71.49%
+[30, 5400], time 6692.63s loss: 0.815, acc: 71.47%
+[30, 5600], time 6699.01s loss: 0.795, acc: 71.49%
+epoch 30 TRAIN error: 0.8039, acc: 0.7148
+epoch 30 VALIDATION error: 0.7783, acc: 0.7354
+[31, 200], time 6746.22s loss: 0.780, acc: 72.14%
+[31, 400], time 6752.52s loss: 0.785, acc: 72.10%
+[31, 600], time 6758.83s loss: 0.778, acc: 72.13%
+[31, 800], time 6764.86s loss: 0.787, acc: 72.26%
+[31, 1000], time 6771.14s loss: 0.806, acc: 72.06%
+[31, 1200], time 6777.37s loss: 0.777, acc: 72.18%
+[31, 1400], time 6783.66s loss: 0.786, acc: 72.14%
+[31, 1600], time 6789.76s loss: 0.784, acc: 72.18%
+[31, 1800], time 6795.89s loss: 0.774, acc: 72.27%
+[31, 2000], time 6802.13s loss: 0.809, acc: 72.20%
+[31, 2200], time 6808.35s loss: 0.812, acc: 72.14%
+[31, 2400], time 6814.53s loss: 0.807, acc: 72.12%
+[31, 2600], time 6820.77s loss: 0.809, acc: 72.08%
+[31, 2800], time 6827.05s loss: 0.796, acc: 72.02%
+[31, 3000], time 6833.28s loss: 0.798, acc: 72.00%
+[31, 3200], time 6839.56s loss: 0.792, acc: 71.98%
+[31, 3400], time 6845.78s loss: 0.772, acc: 72.03%
+[31, 3600], time 6852.06s loss: 0.804, acc: 72.00%
+[31, 3800], time 6858.25s loss: 0.816, acc: 71.96%
+[31, 4000], time 6864.52s loss: 0.803, acc: 71.93%
+[31, 4200], time 6870.69s loss: 0.799, acc: 71.91%
+[31, 4400], time 6876.88s loss: 0.797, acc: 71.89%
+[31, 4600], time 6883.22s loss: 0.825, acc: 71.84%
+[31, 4800], time 6889.44s loss: 0.807, acc: 71.81%
+[31, 5000], time 6895.71s loss: 0.812, acc: 71.79%
+[31, 5200], time 6901.85s loss: 0.803, acc: 71.77%
+[31, 5400], time 6908.15s loss: 0.805, acc: 71.77%
+[31, 5600], time 6914.50s loss: 0.793, acc: 71.77%
+epoch 31 TRAIN error: 0.7970, acc: 0.7178
+epoch 31 VALIDATION error: 0.7938, acc: 0.7303
+[32, 200], time 6961.82s loss: 0.785, acc: 72.72%
+[32, 400], time 6968.24s loss: 0.787, acc: 72.54%
+[32, 600], time 6974.81s loss: 0.790, acc: 72.39%
+[32, 800], time 6981.21s loss: 0.793, acc: 72.27%
+[32, 1000], time 6987.31s loss: 0.768, acc: 72.38%
+[32, 1200], time 6993.63s loss: 0.775, acc: 72.38%
+[32, 1400], time 6999.95s loss: 0.782, acc: 72.45%
+[32, 1600], time 7006.16s loss: 0.776, acc: 72.44%
+[32, 1800], time 7012.36s loss: 0.802, acc: 72.31%
+[32, 2000], time 7018.62s loss: 0.796, acc: 72.26%
+[32, 2200], time 7024.94s loss: 0.792, acc: 72.17%
+[32, 2400], time 7031.23s loss: 0.800, acc: 72.11%
+[32, 2600], time 7037.71s loss: 0.799, acc: 72.09%
+[32, 2800], time 7043.83s loss: 0.802, acc: 72.07%
+[32, 3000], time 7050.25s loss: 0.775, acc: 72.13%
+[32, 3200], time 7056.68s loss: 0.772, acc: 72.17%
+[32, 3400], time 7063.05s loss: 0.806, acc: 72.12%
+[32, 3600], time 7069.52s loss: 0.782, acc: 72.11%
+[32, 3800], time 7075.72s loss: 0.816, acc: 72.05%
+[32, 4000], time 7082.00s loss: 0.783, acc: 72.06%
+[32, 4200], time 7088.30s loss: 0.789, acc: 72.07%
+[32, 4400], time 7094.62s loss: 0.803, acc: 72.06%
+[32, 4600], time 7100.92s loss: 0.776, acc: 72.08%
+[32, 4800], time 7107.25s loss: 0.824, acc: 72.00%
+[32, 5000], time 7113.26s loss: 0.821, acc: 71.98%
+[32, 5200], time 7119.65s loss: 0.787, acc: 71.98%
+[32, 5400], time 7125.77s loss: 0.818, acc: 71.95%
+[32, 5600], time 7132.04s loss: 0.825, acc: 71.88%
+epoch 32 TRAIN error: 0.7936, acc: 0.7189
+epoch 32 VALIDATION error: 0.7784, acc: 0.7317
+[33, 200], time 7179.13s loss: 0.772, acc: 72.05%
+[33, 400], time 7185.54s loss: 0.776, acc: 72.23%
+[33, 600], time 7191.84s loss: 0.804, acc: 71.97%
+[33, 800], time 7198.23s loss: 0.790, acc: 71.91%
+[33, 1000], time 7204.68s loss: 0.768, acc: 72.14%
+[33, 1200], time 7210.93s loss: 0.766, acc: 72.30%
+[33, 1400], time 7217.19s loss: 0.784, acc: 72.28%
+[33, 1600], time 7223.44s loss: 0.783, acc: 72.23%
+[33, 1800], time 7229.75s loss: 0.776, acc: 72.25%
+[33, 2000], time 7236.01s loss: 0.789, acc: 72.30%
+[33, 2200], time 7242.36s loss: 0.806, acc: 72.23%
+[33, 2400], time 7248.61s loss: 0.797, acc: 72.14%
+[33, 2600], time 7254.89s loss: 0.809, acc: 72.11%
+[33, 2800], time 7261.21s loss: 0.801, acc: 72.06%
+[33, 3000], time 7267.25s loss: 0.778, acc: 72.07%
+[33, 3200], time 7273.23s loss: 0.767, acc: 72.11%
+[33, 3400], time 7279.27s loss: 0.791, acc: 72.09%
+[33, 3600], time 7285.57s loss: 0.786, acc: 72.07%
+[33, 3800], time 7291.65s loss: 0.787, acc: 72.06%
+[33, 4000], time 7297.78s loss: 0.822, acc: 71.99%
+[33, 4200], time 7304.07s loss: 0.789, acc: 71.98%
+[33, 4400], time 7310.26s loss: 0.800, acc: 71.97%
+[33, 4600], time 7316.61s loss: 0.789, acc: 71.98%
+[33, 4800], time 7322.92s loss: 0.799, acc: 71.98%
+[33, 5000], time 7329.14s loss: 0.776, acc: 72.03%
+[33, 5200], time 7335.60s loss: 0.802, acc: 72.00%
+[33, 5400], time 7341.80s loss: 0.783, acc: 72.01%
+[33, 5600], time 7348.09s loss: 0.808, acc: 71.99%
+epoch 33 TRAIN error: 0.7893, acc: 0.7199
+epoch 33 VALIDATION error: 0.7933, acc: 0.7335
+[34, 200], time 7395.29s loss: 0.785, acc: 73.28%
+[34, 400], time 7401.71s loss: 0.771, acc: 72.98%
+[34, 600], time 7408.10s loss: 0.783, acc: 72.62%
+[34, 800], time 7414.24s loss: 0.760, acc: 72.71%
+[34, 1000], time 7420.56s loss: 0.775, acc: 72.82%
+[34, 1200], time 7426.83s loss: 0.783, acc: 72.69%
+[34, 1400], time 7433.35s loss: 0.784, acc: 72.66%
+[34, 1600], time 7439.76s loss: 0.775, acc: 72.68%
+[34, 1800], time 7446.29s loss: 0.785, acc: 72.64%
+[34, 2000], time 7452.65s loss: 0.772, acc: 72.65%
+[34, 2200], time 7458.99s loss: 0.783, acc: 72.60%
+[34, 2400], time 7465.27s loss: 0.779, acc: 72.59%
+[34, 2600], time 7471.56s loss: 0.794, acc: 72.51%
+[34, 2800], time 7477.67s loss: 0.809, acc: 72.47%
+[34, 3000], time 7484.05s loss: 0.798, acc: 72.38%
+[34, 3200], time 7490.21s loss: 0.776, acc: 72.41%
+[34, 3400], time 7496.61s loss: 0.785, acc: 72.40%
+[34, 3600], time 7503.08s loss: 0.786, acc: 72.38%
+[34, 3800], time 7509.50s loss: 0.785, acc: 72.38%
+[34, 4000], time 7515.94s loss: 0.781, acc: 72.39%
+[34, 4200], time 7522.35s loss: 0.783, acc: 72.35%
+[34, 4400], time 7528.83s loss: 0.797, acc: 72.31%
+[34, 4600], time 7535.25s loss: 0.795, acc: 72.25%
+[34, 4800], time 7541.64s loss: 0.795, acc: 72.22%
+[34, 5000], time 7548.05s loss: 0.817, acc: 72.20%
+[34, 5200], time 7554.35s loss: 0.750, acc: 72.25%
+[34, 5400], time 7560.80s loss: 0.793, acc: 72.23%
+[34, 5600], time 7567.29s loss: 0.809, acc: 72.19%
+epoch 34 TRAIN error: 0.7852, acc: 0.7220
+epoch 34 VALIDATION error: 0.7592, acc: 0.7399
+[35, 200], time 7615.09s loss: 0.761, acc: 72.83%
+[35, 400], time 7621.39s loss: 0.763, acc: 72.87%
+[35, 600], time 7627.76s loss: 0.791, acc: 72.86%
+[35, 800], time 7634.14s loss: 0.762, acc: 72.97%
+[35, 1000], time 7640.58s loss: 0.768, acc: 72.95%
+[35, 1200], time 7646.96s loss: 0.797, acc: 72.77%
+[35, 1400], time 7653.43s loss: 0.773, acc: 72.83%
+[35, 1600], time 7659.81s loss: 0.767, acc: 72.78%
+[35, 1800], time 7666.18s loss: 0.771, acc: 72.78%
+[35, 2000], time 7672.48s loss: 0.777, acc: 72.75%
+[35, 2200], time 7678.89s loss: 0.794, acc: 72.68%
+[35, 2400], time 7685.24s loss: 0.784, acc: 72.56%
+[35, 2600], time 7691.46s loss: 0.806, acc: 72.42%
+[35, 2800], time 7697.67s loss: 0.767, acc: 72.50%
+[35, 3000], time 7704.04s loss: 0.781, acc: 72.49%
+[35, 3200], time 7710.38s loss: 0.755, acc: 72.51%
+[35, 3400], time 7716.56s loss: 0.787, acc: 72.46%
+[35, 3600], time 7723.03s loss: 0.791, acc: 72.43%
+[35, 3800], time 7729.40s loss: 0.759, acc: 72.46%
+[35, 4000], time 7736.09s loss: 0.797, acc: 72.43%
+[35, 4200], time 7742.71s loss: 0.803, acc: 72.40%
+[35, 4400], time 7748.80s loss: 0.777, acc: 72.39%
+[35, 4600], time 7755.47s loss: 0.767, acc: 72.40%
+[35, 4800], time 7762.15s loss: 0.794, acc: 72.37%
+[35, 5000], time 7768.82s loss: 0.802, acc: 72.34%
+[35, 5200], time 7775.22s loss: 0.777, acc: 72.34%
+[35, 5400], time 7781.56s loss: 0.790, acc: 72.36%
+[35, 5600], time 7787.91s loss: 0.765, acc: 72.39%
+epoch 35 TRAIN error: 0.7798, acc: 0.7237
+epoch 35 VALIDATION error: 0.7998, acc: 0.7308
+[36, 200], time 7835.51s loss: 0.791, acc: 71.98%
+[36, 400], time 7841.57s loss: 0.751, acc: 72.58%
+[36, 600], time 7847.72s loss: 0.733, acc: 73.13%
+[36, 800], time 7854.29s loss: 0.766, acc: 73.09%
+[36, 1000], time 7860.81s loss: 0.764, acc: 73.05%
+[36, 1200], time 7867.30s loss: 0.770, acc: 72.97%
+[36, 1400], time 7873.67s loss: 0.784, acc: 72.87%
+[36, 1600], time 7880.05s loss: 0.772, acc: 72.85%
+[36, 1800], time 7886.56s loss: 0.772, acc: 72.82%
+[36, 2000], time 7892.89s loss: 0.774, acc: 72.80%
+[36, 2200], time 7899.28s loss: 0.799, acc: 72.74%
+[36, 2400], time 7905.77s loss: 0.782, acc: 72.68%
+[36, 2600], time 7912.19s loss: 0.786, acc: 72.61%
+[36, 2800], time 7918.72s loss: 0.781, acc: 72.59%
+[36, 3000], time 7925.24s loss: 0.778, acc: 72.56%
+[36, 3200], time 7931.65s loss: 0.767, acc: 72.59%
+[36, 3400], time 7938.18s loss: 0.799, acc: 72.53%
+[36, 3600], time 7944.48s loss: 0.799, acc: 72.51%
+[36, 3800], time 7950.80s loss: 0.765, acc: 72.50%
+[36, 4000], time 7957.26s loss: 0.780, acc: 72.52%
+[36, 4200], time 7963.63s loss: 0.768, acc: 72.53%
+[36, 4400], time 7970.08s loss: 0.757, acc: 72.53%
+[36, 4600], time 7976.47s loss: 0.822, acc: 72.45%
+[36, 4800], time 7982.91s loss: 0.807, acc: 72.42%
+[36, 5000], time 7989.29s loss: 0.791, acc: 72.41%
+[36, 5200], time 7995.60s loss: 0.782, acc: 72.41%
+[36, 5400], time 8001.93s loss: 0.785, acc: 72.41%
+[36, 5600], time 8008.40s loss: 0.820, acc: 72.35%
+epoch 36 TRAIN error: 0.7802, acc: 0.7235
+epoch 36 VALIDATION error: 0.7738, acc: 0.7391
+[37, 200], time 8056.29s loss: 0.783, acc: 72.05%
+[37, 400], time 8062.83s loss: 0.768, acc: 72.52%
+[37, 600], time 8069.35s loss: 0.757, acc: 72.67%
+[37, 800], time 8075.87s loss: 0.761, acc: 72.79%
+[37, 1000], time 8082.43s loss: 0.777, acc: 72.74%
+[37, 1200], time 8089.03s loss: 0.769, acc: 72.68%
+[37, 1400], time 8095.54s loss: 0.775, acc: 72.56%
+[37, 1600], time 8102.11s loss: 0.785, acc: 72.47%
+[37, 1800], time 8108.67s loss: 0.755, acc: 72.59%
+[37, 2000], time 8115.17s loss: 0.759, acc: 72.62%
+[37, 2200], time 8121.69s loss: 0.757, acc: 72.67%
+[37, 2400], time 8128.17s loss: 0.751, acc: 72.72%
+[37, 2600], time 8134.62s loss: 0.768, acc: 72.67%
+[37, 2800], time 8141.01s loss: 0.779, acc: 72.62%
+[37, 3000], time 8147.34s loss: 0.768, acc: 72.64%
+[37, 3200], time 8153.79s loss: 0.761, acc: 72.64%
+[37, 3400], time 8160.31s loss: 0.793, acc: 72.61%
+[37, 3600], time 8166.80s loss: 0.777, acc: 72.60%
+[37, 3800], time 8173.24s loss: 0.787, acc: 72.58%
+[37, 4000], time 8179.63s loss: 0.782, acc: 72.54%
+[37, 4200], time 8186.08s loss: 0.805, acc: 72.48%
+[37, 4400], time 8192.51s loss: 0.785, acc: 72.45%
+[37, 4600], time 8198.97s loss: 0.795, acc: 72.46%
+[37, 4800], time 8205.47s loss: 0.773, acc: 72.47%
+[37, 5000], time 8212.03s loss: 0.805, acc: 72.42%
+[37, 5200], time 8218.51s loss: 0.799, acc: 72.40%
+[37, 5400], time 8225.01s loss: 0.793, acc: 72.35%
+[37, 5600], time 8231.29s loss: 0.768, acc: 72.37%
+epoch 37 TRAIN error: 0.7763, acc: 0.7237
+epoch 37 VALIDATION error: 0.7576, acc: 0.7429
+[38, 200], time 8278.65s loss: 0.761, acc: 73.42%
+[38, 400], time 8285.06s loss: 0.746, acc: 73.58%
+[38, 600], time 8291.42s loss: 0.754, acc: 73.41%
+[38, 800], time 8297.85s loss: 0.742, acc: 73.59%
+[38, 1000], time 8304.31s loss: 0.761, acc: 73.42%
+[38, 1200], time 8310.72s loss: 0.771, acc: 73.28%
+[38, 1400], time 8317.14s loss: 0.761, acc: 73.19%
+[38, 1600], time 8323.37s loss: 0.777, acc: 73.08%
+[38, 1800], time 8329.66s loss: 0.773, acc: 73.02%
+[38, 2000], time 8336.19s loss: 0.757, acc: 73.06%
+[38, 2200], time 8342.59s loss: 0.762, acc: 73.08%
+[38, 2400], time 8349.08s loss: 0.774, acc: 73.03%
+[38, 2600], time 8355.50s loss: 0.762, acc: 73.01%
+[38, 2800], time 8361.95s loss: 0.751, acc: 73.02%
+[38, 3000], time 8368.33s loss: 0.775, acc: 72.97%
+[38, 3200], time 8374.79s loss: 0.765, acc: 72.94%
+[38, 3400], time 8381.27s loss: 0.773, acc: 72.90%
+[38, 3600], time 8387.74s loss: 0.788, acc: 72.83%
+[38, 3800], time 8394.22s loss: 0.751, acc: 72.86%
+[38, 4000], time 8400.75s loss: 0.807, acc: 72.78%
+[38, 4200], time 8407.24s loss: 0.775, acc: 72.78%
+[38, 4400], time 8413.79s loss: 0.770, acc: 72.76%
+[38, 4600], time 8420.33s loss: 0.775, acc: 72.77%
+[38, 4800], time 8426.75s loss: 0.772, acc: 72.77%
+[38, 5000], time 8433.27s loss: 0.761, acc: 72.78%
+[38, 5200], time 8439.85s loss: 0.790, acc: 72.73%
+[38, 5400], time 8446.30s loss: 0.773, acc: 72.72%
+[38, 5600], time 8452.90s loss: 0.798, acc: 72.69%
+epoch 38 TRAIN error: 0.7686, acc: 0.7269
+epoch 38 VALIDATION error: 0.7648, acc: 0.7394
+[39, 200], time 8501.32s loss: 0.728, acc: 74.25%
+[39, 400], time 8507.92s loss: 0.742, acc: 74.15%
+[39, 600], time 8514.42s loss: 0.764, acc: 73.68%
+[39, 800], time 8520.83s loss: 0.758, acc: 73.71%
+[39, 1000], time 8527.21s loss: 0.773, acc: 73.64%
+[39, 1200], time 8533.73s loss: 0.774, acc: 73.55%
+[39, 1400], time 8540.04s loss: 0.756, acc: 73.48%
+[39, 1600], time 8546.26s loss: 0.756, acc: 73.41%
+[39, 1800], time 8552.77s loss: 0.739, acc: 73.46%
+[39, 2000], time 8559.24s loss: 0.780, acc: 73.34%
+[39, 2200], time 8565.63s loss: 0.762, acc: 73.29%
+[39, 2400], time 8572.00s loss: 0.769, acc: 73.24%
+[39, 2600], time 8578.38s loss: 0.758, acc: 73.20%
+[39, 2800], time 8584.88s loss: 0.755, acc: 73.20%
+[39, 3000], time 8591.35s loss: 0.772, acc: 73.20%
+[39, 3200], time 8597.78s loss: 0.775, acc: 73.18%
+[39, 3400], time 8604.18s loss: 0.760, acc: 73.18%
+[39, 3600], time 8610.65s loss: 0.769, acc: 73.14%
+[39, 3800], time 8617.14s loss: 0.776, acc: 73.12%
+[39, 4000], time 8623.57s loss: 0.779, acc: 73.08%
+[39, 4200], time 8630.08s loss: 0.780, acc: 73.05%
+[39, 4400], time 8636.48s loss: 0.765, acc: 73.06%
+[39, 4600], time 8642.94s loss: 0.781, acc: 73.02%
+[39, 4800], time 8649.40s loss: 0.756, acc: 73.02%
+[39, 5000], time 8655.79s loss: 0.781, acc: 72.94%
+[39, 5200], time 8662.15s loss: 0.767, acc: 72.94%
+[39, 5400], time 8668.50s loss: 0.782, acc: 72.91%
+[39, 5600], time 8675.01s loss: 0.781, acc: 72.91%
+epoch 39 TRAIN error: 0.7656, acc: 0.7291
+epoch 39 VALIDATION error: 0.7741, acc: 0.7391
+[40, 200], time 8722.63s loss: 0.756, acc: 73.06%
+[40, 400], time 8728.96s loss: 0.753, acc: 73.29%
+[40, 600], time 8735.46s loss: 0.758, acc: 73.18%
+[40, 800], time 8741.84s loss: 0.759, acc: 73.01%
+[40, 1000], time 8748.12s loss: 0.755, acc: 72.91%
+[40, 1200], time 8754.62s loss: 0.748, acc: 72.97%
+[40, 1400], time 8761.07s loss: 0.760, acc: 73.05%
+[40, 1600], time 8767.73s loss: 0.759, acc: 73.08%
+[40, 1800], time 8774.15s loss: 0.755, acc: 73.10%
+[40, 2000], time 8780.68s loss: 0.750, acc: 73.18%
+[40, 2200], time 8787.30s loss: 0.750, acc: 73.20%
+[40, 2400], time 8793.90s loss: 0.764, acc: 73.17%
+[40, 2600], time 8800.24s loss: 0.774, acc: 73.12%
+[40, 2800], time 8806.81s loss: 0.755, acc: 73.11%
+[40, 3000], time 8813.33s loss: 0.755, acc: 73.11%
+[40, 3200], time 8819.88s loss: 0.789, acc: 73.03%
+[40, 3400], time 8826.38s loss: 0.766, acc: 73.00%
+[40, 3600], time 8832.99s loss: 0.763, acc: 72.99%
+[40, 3800], time 8839.52s loss: 0.767, acc: 72.96%
+[40, 4000], time 8846.08s loss: 0.774, acc: 72.93%
+[40, 4200], time 8852.64s loss: 0.765, acc: 72.95%
+[40, 4400], time 8859.15s loss: 0.747, acc: 72.97%
+[40, 4600], time 8865.59s loss: 0.749, acc: 72.99%
+[40, 4800], time 8872.12s loss: 0.787, acc: 72.96%
+[40, 5000], time 8878.47s loss: 0.749, acc: 72.97%
+[40, 5200], time 8885.07s loss: 0.771, acc: 72.95%
+[40, 5400], time 8891.52s loss: 0.763, acc: 72.95%
+[40, 5600], time 8897.92s loss: 0.757, acc: 72.95%
+epoch 40 TRAIN error: 0.7606, acc: 0.7295
+epoch 40 VALIDATION error: 0.7747, acc: 0.7389
+[41, 200], time 8945.99s loss: 0.749, acc: 73.23%
+[41, 400], time 8952.48s loss: 0.744, acc: 73.25%
+[41, 600], time 8958.87s loss: 0.753, acc: 73.45%
+[41, 800], time 8965.29s loss: 0.757, acc: 73.30%
+[41, 1000], time 8971.76s loss: 0.766, acc: 73.20%
+[41, 1200], time 8978.19s loss: 0.747, acc: 73.26%
+[41, 1400], time 8984.56s loss: 0.739, acc: 73.30%
+[41, 1600], time 8991.05s loss: 0.774, acc: 73.21%
+[41, 1800], time 8997.51s loss: 0.744, acc: 73.23%
+[41, 2000], time 9004.01s loss: 0.751, acc: 73.23%
+[41, 2200], time 9010.40s loss: 0.730, acc: 73.30%
+[41, 2400], time 9016.87s loss: 0.767, acc: 73.25%
+[41, 2600], time 9023.39s loss: 0.767, acc: 73.15%
+[41, 2800], time 9029.80s loss: 0.760, acc: 73.18%
+[41, 3000], time 9036.21s loss: 0.759, acc: 73.13%
+[41, 3200], time 9042.71s loss: 0.784, acc: 73.05%
+[41, 3400], time 9049.10s loss: 0.770, acc: 73.06%
+[41, 3600], time 9055.49s loss: 0.780, acc: 72.99%
+[41, 3800], time 9061.93s loss: 0.761, acc: 73.01%
+[41, 4000], time 9068.36s loss: 0.763, acc: 72.99%
+[41, 4200], time 9074.81s loss: 0.743, acc: 73.00%
+[41, 4400], time 9081.20s loss: 0.773, acc: 72.97%
+[41, 4600], time 9087.63s loss: 0.763, acc: 72.98%
+[41, 4800], time 9093.99s loss: 0.787, acc: 72.95%
+[41, 5000], time 9100.41s loss: 0.775, acc: 72.93%
+[41, 5200], time 9106.88s loss: 0.751, acc: 72.93%
+[41, 5400], time 9113.24s loss: 0.772, acc: 72.90%
+[41, 5600], time 9119.69s loss: 0.769, acc: 72.91%
+epoch 41 TRAIN error: 0.7604, acc: 0.7291
+epoch 41 VALIDATION error: 0.7565, acc: 0.7451
+[42, 200], time 9168.88s loss: 0.746, acc: 73.94%
+[42, 400], time 9175.28s loss: 0.715, acc: 74.30%
+[42, 600], time 9181.76s loss: 0.733, acc: 74.15%
+[42, 800], time 9188.44s loss: 0.746, acc: 74.20%
+[42, 1000], time 9195.12s loss: 0.750, acc: 73.97%
+[42, 1200], time 9201.32s loss: 0.741, acc: 73.96%
+[42, 1400], time 9207.67s loss: 0.771, acc: 73.83%
+[42, 1600], time 9214.10s loss: 0.756, acc: 73.79%
+[42, 1800], time 9220.44s loss: 0.748, acc: 73.79%
+[42, 2000], time 9226.68s loss: 0.736, acc: 73.70%
+[42, 2200], time 9232.97s loss: 0.750, acc: 73.67%
+[42, 2400], time 9239.37s loss: 0.742, acc: 73.70%
+[42, 2600], time 9245.56s loss: 0.789, acc: 73.57%
+[42, 2800], time 9251.85s loss: 0.754, acc: 73.53%
+[42, 3000], time 9258.21s loss: 0.737, acc: 73.55%
+[42, 3200], time 9264.50s loss: 0.764, acc: 73.49%
+[42, 3400], time 9270.86s loss: 0.774, acc: 73.44%
+[42, 3600], time 9276.89s loss: 0.750, acc: 73.44%
+[42, 3800], time 9283.04s loss: 0.764, acc: 73.44%
+[42, 4000], time 9289.43s loss: 0.743, acc: 73.44%
+[42, 4200], time 9296.12s loss: 0.772, acc: 73.42%
+[42, 4400], time 9302.65s loss: 0.758, acc: 73.39%
+[42, 4600], time 9309.24s loss: 0.772, acc: 73.34%
+[42, 4800], time 9315.64s loss: 0.774, acc: 73.33%
+[42, 5000], time 9322.15s loss: 0.785, acc: 73.29%
+[42, 5200], time 9328.63s loss: 0.766, acc: 73.28%
+[42, 5400], time 9335.05s loss: 0.778, acc: 73.23%
+[42, 5600], time 9341.47s loss: 0.768, acc: 73.20%
+epoch 42 TRAIN error: 0.7565, acc: 0.7320
+epoch 42 VALIDATION error: 0.7616, acc: 0.7405
+[43, 200], time 9389.69s loss: 0.733, acc: 74.45%
+[43, 400], time 9396.01s loss: 0.720, acc: 74.47%
+[43, 600], time 9402.32s loss: 0.728, acc: 74.49%
+[43, 800], time 9408.69s loss: 0.740, acc: 74.39%
+[43, 1000], time 9414.95s loss: 0.736, acc: 74.33%
+[43, 1200], time 9421.41s loss: 0.741, acc: 74.31%
+[43, 1400], time 9427.87s loss: 0.733, acc: 74.21%
+[43, 1600], time 9434.41s loss: 0.756, acc: 73.97%
+[43, 1800], time 9440.87s loss: 0.771, acc: 73.79%
+[43, 2000], time 9447.34s loss: 0.762, acc: 73.69%
+[43, 2200], time 9453.68s loss: 0.772, acc: 73.59%
+[43, 2400], time 9460.07s loss: 0.752, acc: 73.61%
+[43, 2600], time 9466.39s loss: 0.774, acc: 73.52%
+[43, 2800], time 9472.85s loss: 0.771, acc: 73.47%
+[43, 3000], time 9479.36s loss: 0.762, acc: 73.43%
+[43, 3200], time 9485.79s loss: 0.773, acc: 73.41%
+[43, 3400], time 9492.37s loss: 0.758, acc: 73.38%
+[43, 3600], time 9498.74s loss: 0.761, acc: 73.38%
+[43, 3800], time 9505.19s loss: 0.753, acc: 73.37%
+[43, 4000], time 9511.75s loss: 0.767, acc: 73.33%
+[43, 4200], time 9518.32s loss: 0.758, acc: 73.32%
+[43, 4400], time 9524.88s loss: 0.759, acc: 73.32%
+[43, 4600], time 9531.41s loss: 0.751, acc: 73.32%
+[43, 4800], time 9537.86s loss: 0.761, acc: 73.31%
+[43, 5000], time 9544.46s loss: 0.775, acc: 73.30%
+[43, 5200], time 9551.05s loss: 0.772, acc: 73.26%
+[43, 5400], time 9557.38s loss: 0.775, acc: 73.22%
+[43, 5600], time 9563.64s loss: 0.753, acc: 73.22%
+epoch 43 TRAIN error: 0.7559, acc: 0.7322
+epoch 43 VALIDATION error: 0.7489, acc: 0.7435
+[44, 200], time 9611.99s loss: 0.743, acc: 73.41%
+[44, 400], time 9618.40s loss: 0.756, acc: 73.34%
+[44, 600], time 9624.77s loss: 0.719, acc: 73.65%
+[44, 800], time 9631.26s loss: 0.751, acc: 73.51%
+[44, 1000], time 9637.67s loss: 0.754, acc: 73.46%
+[44, 1200], time 9644.16s loss: 0.724, acc: 73.41%
+[44, 1400], time 9650.48s loss: 0.740, acc: 73.48%
+[44, 1600], time 9656.97s loss: 0.737, acc: 73.51%
+[44, 1800], time 9663.52s loss: 0.741, acc: 73.56%
+[44, 2000], time 9670.05s loss: 0.743, acc: 73.62%
+[44, 2200], time 9676.60s loss: 0.783, acc: 73.48%
+[44, 2400], time 9683.09s loss: 0.733, acc: 73.57%
+[44, 2600], time 9689.55s loss: 0.751, acc: 73.57%
+[44, 2800], time 9696.03s loss: 0.737, acc: 73.61%
+[44, 3000], time 9702.46s loss: 0.787, acc: 73.52%
+[44, 3200], time 9708.96s loss: 0.736, acc: 73.56%
+[44, 3400], time 9715.44s loss: 0.749, acc: 73.57%
+[44, 3600], time 9722.06s loss: 0.733, acc: 73.56%
+[44, 3800], time 9728.53s loss: 0.750, acc: 73.53%
+[44, 4000], time 9735.15s loss: 0.769, acc: 73.49%
+[44, 4200], time 9741.73s loss: 0.762, acc: 73.48%
+[44, 4400], time 9748.25s loss: 0.755, acc: 73.45%
+[44, 4600], time 9754.87s loss: 0.741, acc: 73.48%
+[44, 4800], time 9761.39s loss: 0.757, acc: 73.46%
+[44, 5000], time 9767.84s loss: 0.764, acc: 73.41%
+[44, 5200], time 9774.35s loss: 0.743, acc: 73.40%
+[44, 5400], time 9780.84s loss: 0.737, acc: 73.44%
+[44, 5600], time 9787.36s loss: 0.787, acc: 73.39%
+epoch 44 TRAIN error: 0.7495, acc: 0.7339
+epoch 44 VALIDATION error: 0.7635, acc: 0.7403
+[45, 200], time 9836.26s loss: 0.723, acc: 74.25%
+[45, 400], time 9842.79s loss: 0.743, acc: 73.92%
+[45, 600], time 9849.28s loss: 0.748, acc: 73.89%
+[45, 800], time 9855.92s loss: 0.713, acc: 74.18%
+[45, 1000], time 9862.35s loss: 0.732, acc: 74.14%
+[45, 1200], time 9868.96s loss: 0.735, acc: 74.07%
+[45, 1400], time 9875.52s loss: 0.770, acc: 73.87%
+[45, 1600], time 9882.01s loss: 0.755, acc: 73.77%
+[45, 1800], time 9888.40s loss: 0.727, acc: 73.79%
+[45, 2000], time 9894.87s loss: 0.737, acc: 73.75%
+[45, 2200], time 9901.38s loss: 0.760, acc: 73.69%
+[45, 2400], time 9907.98s loss: 0.761, acc: 73.68%
+[45, 2600], time 9914.45s loss: 0.763, acc: 73.61%
+[45, 2800], time 9920.90s loss: 0.732, acc: 73.67%
+[45, 3000], time 9927.39s loss: 0.742, acc: 73.65%
+[45, 3200], time 9933.86s loss: 0.723, acc: 73.69%
+[45, 3400], time 9940.37s loss: 0.780, acc: 73.60%
+[45, 3600], time 9946.86s loss: 0.756, acc: 73.57%
+[45, 3800], time 9953.36s loss: 0.779, acc: 73.47%
+[45, 4000], time 9959.80s loss: 0.756, acc: 73.48%
+[45, 4200], time 9966.13s loss: 0.733, acc: 73.48%
+[45, 4400], time 9972.66s loss: 0.758, acc: 73.48%
+[45, 4600], time 9979.14s loss: 0.736, acc: 73.47%
+[45, 4800], time 9985.68s loss: 0.763, acc: 73.44%
+[45, 5000], time 9992.19s loss: 0.736, acc: 73.47%
+[45, 5200], time 9998.44s loss: 0.756, acc: 73.47%
+[45, 5400], time 10004.85s loss: 0.765, acc: 73.45%
+[45, 5600], time 10011.33s loss: 0.750, acc: 73.41%
+epoch 45 TRAIN error: 0.7474, acc: 0.7342
+epoch 45 VALIDATION error: 0.7364, acc: 0.7470
+[46, 200], time 10060.04s loss: 0.712, acc: 74.16%
+[46, 400], time 10066.57s loss: 0.730, acc: 74.28%
+[46, 600], time 10073.20s loss: 0.717, acc: 74.36%
+[46, 800], time 10079.70s loss: 0.730, acc: 74.14%
+[46, 1000], time 10086.19s loss: 0.743, acc: 74.09%
+[46, 1200], time 10092.88s loss: 0.752, acc: 73.97%
+[46, 1400], time 10099.42s loss: 0.736, acc: 73.91%
+[46, 1600], time 10105.94s loss: 0.746, acc: 73.84%
+[46, 1800], time 10112.57s loss: 0.749, acc: 73.82%
+[46, 2000], time 10119.09s loss: 0.721, acc: 73.90%
+[46, 2200], time 10125.66s loss: 0.756, acc: 73.82%
+[46, 2400], time 10132.10s loss: 0.720, acc: 73.83%
+[46, 2600], time 10138.69s loss: 0.762, acc: 73.74%
+[46, 2800], time 10145.34s loss: 0.751, acc: 73.72%
+[46, 3000], time 10151.83s loss: 0.750, acc: 73.72%
+[46, 3200], time 10158.35s loss: 0.753, acc: 73.73%
+[46, 3400], time 10164.78s loss: 0.768, acc: 73.64%
+[46, 3600], time 10171.28s loss: 0.766, acc: 73.59%
+[46, 3800], time 10177.73s loss: 0.750, acc: 73.57%
+[46, 4000], time 10184.15s loss: 0.737, acc: 73.59%
+[46, 4200], time 10190.67s loss: 0.763, acc: 73.53%
+[46, 4400], time 10197.07s loss: 0.752, acc: 73.50%
+[46, 4600], time 10203.64s loss: 0.738, acc: 73.50%
+[46, 4800], time 10210.18s loss: 0.743, acc: 73.49%
+[46, 5000], time 10216.73s loss: 0.751, acc: 73.48%
+[46, 5200], time 10223.27s loss: 0.748, acc: 73.48%
+[46, 5400], time 10229.74s loss: 0.753, acc: 73.47%
+[46, 5600], time 10236.26s loss: 0.770, acc: 73.45%
+epoch 46 TRAIN error: 0.7451, acc: 0.7346
+epoch 46 VALIDATION error: 0.7589, acc: 0.7420
+[47, 200], time 10284.55s loss: 0.704, acc: 74.50%
+[47, 400], time 10291.17s loss: 0.714, acc: 74.39%
+[47, 600], time 10297.45s loss: 0.737, acc: 74.08%
+[47, 800], time 10303.90s loss: 0.745, acc: 74.00%
+[47, 1000], time 10310.40s loss: 0.731, acc: 73.95%
+[47, 1200], time 10316.93s loss: 0.726, acc: 73.95%
+[47, 1400], time 10323.36s loss: 0.736, acc: 73.88%
+[47, 1600], time 10329.80s loss: 0.738, acc: 73.82%
+[47, 1800], time 10336.42s loss: 0.745, acc: 73.80%
+[47, 2000], time 10343.01s loss: 0.729, acc: 73.84%
+[47, 2200], time 10349.34s loss: 0.735, acc: 73.81%
+[47, 2400], time 10355.72s loss: 0.767, acc: 73.75%
+[47, 2600], time 10362.13s loss: 0.761, acc: 73.69%
+[47, 2800], time 10368.61s loss: 0.762, acc: 73.60%
+[47, 3000], time 10375.18s loss: 0.748, acc: 73.58%
+[47, 3200], time 10381.63s loss: 0.756, acc: 73.55%
+[47, 3400], time 10388.08s loss: 0.762, acc: 73.53%
+[47, 3600], time 10394.61s loss: 0.770, acc: 73.51%
+[47, 3800], time 10401.10s loss: 0.764, acc: 73.51%
+[47, 4000], time 10407.59s loss: 0.738, acc: 73.52%
+[47, 4200], time 10414.14s loss: 0.740, acc: 73.52%
+[47, 4400], time 10420.75s loss: 0.730, acc: 73.54%
+[47, 4600], time 10427.40s loss: 0.734, acc: 73.55%
+[47, 4800], time 10434.04s loss: 0.734, acc: 73.57%
+[47, 5000], time 10440.63s loss: 0.779, acc: 73.52%
+[47, 5200], time 10447.09s loss: 0.741, acc: 73.54%
+[47, 5400], time 10453.71s loss: 0.729, acc: 73.57%
+[47, 5600], time 10460.27s loss: 0.757, acc: 73.55%
+epoch 47 TRAIN error: 0.7433, acc: 0.7355
+epoch 47 VALIDATION error: 0.7623, acc: 0.7427
+[48, 200], time 10508.84s loss: 0.721, acc: 74.03%
+[48, 400], time 10515.33s loss: 0.713, acc: 74.30%
+[48, 600], time 10521.85s loss: 0.716, acc: 74.45%
+[48, 800], time 10528.25s loss: 0.736, acc: 74.32%
+[48, 1000], time 10534.77s loss: 0.729, acc: 74.42%
+[48, 1200], time 10541.27s loss: 0.720, acc: 74.44%
+[48, 1400], time 10547.81s loss: 0.735, acc: 74.35%
+[48, 1600], time 10554.37s loss: 0.738, acc: 74.28%
+[48, 1800], time 10560.90s loss: 0.756, acc: 74.20%
+[48, 2000], time 10567.54s loss: 0.726, acc: 74.22%
+[48, 2200], time 10574.09s loss: 0.729, acc: 74.21%
+[48, 2400], time 10580.48s loss: 0.762, acc: 74.15%
+[48, 2600], time 10587.01s loss: 0.722, acc: 74.17%
+[48, 2800], time 10593.56s loss: 0.742, acc: 74.13%
+[48, 3000], time 10600.12s loss: 0.762, acc: 74.03%
+[48, 3200], time 10606.44s loss: 0.736, acc: 73.99%
+[48, 3400], time 10612.70s loss: 0.735, acc: 73.97%
+[48, 3600], time 10619.17s loss: 0.743, acc: 73.96%
+[48, 3800], time 10625.64s loss: 0.761, acc: 73.90%
+[48, 4000], time 10632.11s loss: 0.742, acc: 73.89%
+[48, 4200], time 10638.67s loss: 0.774, acc: 73.82%
+[48, 4400], time 10645.01s loss: 0.738, acc: 73.82%
+[48, 4600], time 10651.53s loss: 0.741, acc: 73.81%
+[48, 4800], time 10658.14s loss: 0.749, acc: 73.79%
+[48, 5000], time 10664.59s loss: 0.762, acc: 73.77%
+[48, 5200], time 10671.12s loss: 0.746, acc: 73.76%
+[48, 5400], time 10677.58s loss: 0.754, acc: 73.75%
+[48, 5600], time 10683.88s loss: 0.767, acc: 73.70%
+epoch 48 TRAIN error: 0.7410, acc: 0.7371
+epoch 48 VALIDATION error: 0.7566, acc: 0.7420
+[49, 200], time 10732.37s loss: 0.698, acc: 75.28%
+[49, 400], time 10738.87s loss: 0.728, acc: 74.63%
+[49, 600], time 10745.40s loss: 0.716, acc: 74.54%
+[49, 800], time 10751.96s loss: 0.754, acc: 74.32%
+[49, 1000], time 10758.52s loss: 0.727, acc: 74.24%
+[49, 1200], time 10765.14s loss: 0.727, acc: 74.28%
+[49, 1400], time 10771.58s loss: 0.728, acc: 74.29%
+[49, 1600], time 10778.14s loss: 0.767, acc: 74.07%
+[49, 1800], time 10784.74s loss: 0.756, acc: 73.99%
+[49, 2000], time 10791.23s loss: 0.728, acc: 74.02%
+[49, 2200], time 10797.82s loss: 0.723, acc: 74.02%
+[49, 2400], time 10804.38s loss: 0.729, acc: 74.02%
+[49, 2600], time 10810.93s loss: 0.716, acc: 74.08%
+[49, 2800], time 10817.52s loss: 0.730, acc: 74.13%
+[49, 3000], time 10824.01s loss: 0.741, acc: 74.12%
+[49, 3200], time 10830.49s loss: 0.742, acc: 74.11%
+[49, 3400], time 10836.93s loss: 0.726, acc: 74.09%
+[49, 3600], time 10843.48s loss: 0.750, acc: 74.03%
+[49, 3800], time 10850.09s loss: 0.738, acc: 74.02%
+[49, 4000], time 10856.49s loss: 0.728, acc: 74.05%
+[49, 4200], time 10863.01s loss: 0.759, acc: 74.03%
+[49, 4400], time 10869.30s loss: 0.769, acc: 73.99%
+[49, 4600], time 10875.76s loss: 0.732, acc: 73.96%
+[49, 4800], time 10882.04s loss: 0.751, acc: 73.94%
+[49, 5000], time 10888.49s loss: 0.761, acc: 73.88%
+[49, 5200], time 10894.89s loss: 0.767, acc: 73.84%
+[49, 5400], time 10901.28s loss: 0.752, acc: 73.83%
+[49, 5600], time 10907.76s loss: 0.755, acc: 73.81%
+epoch 49 TRAIN error: 0.7392, acc: 0.7381
+epoch 49 VALIDATION error: 0.7655, acc: 0.7418
+[50, 200], time 10955.65s loss: 0.712, acc: 75.09%
+[50, 400], time 10962.15s loss: 0.731, acc: 74.44%
+[50, 600], time 10968.65s loss: 0.699, acc: 74.74%
+[50, 800], time 10974.91s loss: 0.729, acc: 74.72%
+[50, 1000], time 10981.23s loss: 0.739, acc: 74.42%
+[50, 1200], time 10987.60s loss: 0.720, acc: 74.46%
+[50, 1400], time 10994.07s loss: 0.721, acc: 74.44%
+[50, 1600], time 11000.49s loss: 0.734, acc: 74.40%
+[50, 1800], time 11006.95s loss: 0.750, acc: 74.26%
+[50, 2000], time 11013.40s loss: 0.757, acc: 74.14%
+[50, 2200], time 11019.89s loss: 0.734, acc: 74.11%
+[50, 2400], time 11026.22s loss: 0.750, acc: 74.07%
+[50, 2600], time 11032.41s loss: 0.744, acc: 74.02%
+[50, 2800], time 11038.80s loss: 0.733, acc: 74.02%
+[50, 3000], time 11045.18s loss: 0.729, acc: 74.02%
+[50, 3200], time 11051.76s loss: 0.720, acc: 74.04%
+[50, 3400], time 11058.29s loss: 0.732, acc: 74.04%
+[50, 3600], time 11064.72s loss: 0.746, acc: 73.98%
+[50, 3800], time 11071.18s loss: 0.735, acc: 73.98%
+[50, 4000], time 11077.53s loss: 0.717, acc: 73.99%
+[50, 4200], time 11083.89s loss: 0.744, acc: 73.95%
+[50, 4400], time 11090.35s loss: 0.741, acc: 73.95%
+[50, 4600], time 11096.83s loss: 0.752, acc: 73.95%
+[50, 4800], time 11103.22s loss: 0.747, acc: 73.96%
+[50, 5000], time 11109.75s loss: 0.717, acc: 73.97%
+[50, 5200], time 11116.30s loss: 0.768, acc: 73.93%
+[50, 5400], time 11122.78s loss: 0.718, acc: 73.94%
+[50, 5600], time 11129.28s loss: 0.749, acc: 73.91%
+epoch 50 TRAIN error: 0.7346, acc: 0.7390
+epoch 50 VALIDATION error: 0.8180, acc: 0.7303
+[51, 200], time 11178.02s loss: 0.718, acc: 73.98%
+[51, 400], time 11184.46s loss: 0.731, acc: 73.78%
+[51, 600], time 11190.88s loss: 0.741, acc: 73.60%
+[51, 800], time 11197.40s loss: 0.707, acc: 73.89%
+[51, 1000], time 11203.97s loss: 0.708, acc: 74.15%
+[51, 1200], time 11210.46s loss: 0.718, acc: 74.26%
+[51, 1400], time 11216.74s loss: 0.755, acc: 74.08%
+[51, 1600], time 11223.22s loss: 0.736, acc: 74.02%
+[51, 1800], time 11229.69s loss: 0.718, acc: 74.10%
+[51, 2000], time 11236.29s loss: 0.743, acc: 74.09%
+[51, 2200], time 11242.80s loss: 0.747, acc: 74.03%
+[51, 2400], time 11249.28s loss: 0.729, acc: 74.03%
+[51, 2600], time 11255.84s loss: 0.728, acc: 74.06%
+[51, 2800], time 11262.42s loss: 0.718, acc: 74.06%
+[51, 3000], time 11268.96s loss: 0.743, acc: 74.04%
+[51, 3200], time 11275.48s loss: 0.742, acc: 74.06%
+[51, 3400], time 11282.03s loss: 0.737, acc: 74.05%
+[51, 3600], time 11288.44s loss: 0.723, acc: 74.04%
+[51, 3800], time 11294.85s loss: 0.731, acc: 74.05%
+[51, 4000], time 11301.39s loss: 0.726, acc: 74.03%
+[51, 4200], time 11307.91s loss: 0.740, acc: 74.01%
+[51, 4400], time 11314.21s loss: 0.705, acc: 74.04%
+[51, 4600], time 11320.60s loss: 0.729, acc: 74.07%
+[51, 4800], time 11327.07s loss: 0.746, acc: 74.04%
+[51, 5000], time 11333.46s loss: 0.771, acc: 73.96%
+[51, 5200], time 11339.99s loss: 0.730, acc: 73.96%
+[51, 5400], time 11346.32s loss: 0.731, acc: 73.96%
+[51, 5600], time 11352.75s loss: 0.739, acc: 73.96%
+epoch 51 TRAIN error: 0.7320, acc: 0.7395
+epoch 51 VALIDATION error: 0.7598, acc: 0.7434
+Early stopping triggered!
