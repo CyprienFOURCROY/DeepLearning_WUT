@@ -4,60 +4,20 @@
         "freq_bins": 64,
         "time_steps": 64,
         "batch_size": 32,
-        "train_set_size": 900,
+        "train_set_size": 62999,
         "optimizer": "SGD",
         "loss_function": "CrossEntropyLoss()",
         "num_epochs": 60,
-        "proportion": 1
+        "proportion": 70
     },
     "data": {
         "1": {
             "batches": {},
             "summary": {
-                "train_loss": 1.7178066187891468,
-                "train_acc": 0.36777777777777776,
-                "val_loss": 1.7263265299479167,
-                "val_acc": 0.3449888888888889,
-                "lr": 0.001
-            }
-        },
-        "2": {
-            "batches": {},
-            "summary": {
-                "train_loss": 1.705238149083894,
-                "train_acc": 0.38555555555555554,
-                "val_loss": 1.85415495584276,
-                "val_acc": 0.31385555555555555,
-                "lr": 0.001
-            }
-        },
-        "3": {
-            "batches": {},
-            "summary": {
-                "train_loss": 1.6827581545402264,
-                "train_acc": 0.38222222222222224,
-                "val_loss": 1.7369067165586682,
-                "val_acc": 0.34096666666666664,
-                "lr": 0.001
-            }
-        },
-        "4": {
-            "batches": {},
-            "summary": {
-                "train_loss": 1.6560348971136685,
-                "train_acc": 0.42777777777777776,
-                "val_loss": 1.7560394058651394,
-                "val_acc": 0.3372,
-                "lr": 0.001
-            }
-        },
-        "5": {
-            "batches": {},
-            "summary": {
-                "train_loss": 1.638949233910133,
-                "train_acc": 0.4122222222222222,
-                "val_loss": 1.803806550195482,
-                "val_acc": 0.3279222222222222,
+                "train_loss": 0.7653322089378334,
+                "train_acc": 0.7295353894506262,
+                "val_loss": 0.8817122023185094,
+                "val_acc": 0.6925444444444444,
                 "lr": 0.001
             }
         }
