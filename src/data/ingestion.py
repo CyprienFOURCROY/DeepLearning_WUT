@@ -7,8 +7,33 @@ from PIL import Image
 import torch
 import torchvision.transforms as transforms
 import random
+import numpy as np
 
 random.seed(42)
+
+class Cutout(object):
+    """Apply Cutout augmentation to a PIL Image by masking out a random square region."""
+    def __init__(self, cutout_size=4):
+        self.cutout_size = cutout_size
+
+    def __call__(self, img):
+        # Convert image to numpy array
+        np_img = np.array(img)
+        h, w, _ = np_img.shape
+
+        # Choose random center for the cutout square
+        center_x = random.randint(0, w)
+        center_y = random.randint(0, h)
+
+        # Compute the bounds of the square
+        x1 = max(0, center_x - self.cutout_size // 2)
+        y1 = max(0, center_y - self.cutout_size // 2)
+        x2 = min(w, center_x + self.cutout_size // 2)
+        y2 = min(h, center_y + self.cutout_size // 2)
+
+        # Set the selected region to zero (black)
+        np_img[y1:y2, x1:x2, :] = 0
+        return Image.fromarray(np_img)
 
 @click.command()
 @click.argument("input_filepath", type=click.Path(exists=True))
@@ -21,7 +46,8 @@ random.seed(42)
 )
 @click.option("--brightness", is_flag=True, help="Adjust brightness randomly.")
 @click.option("--contrast", is_flag=True, help="Adjust contrast randomly.")
-def main(input_filepath, output_filepath, rotate, flip, brightness, contrast):
+@click.option("--cutout", is_flag=True, help="Apply cutout augmentation to the image.")
+def main(input_filepath, output_filepath, rotate, flip, brightness, contrast, cutout):
     """
     Runs data processing scripts to turn raw PNG images from input_filepath
     into transformed PNG images stored in output_filepath.
@@ -61,7 +87,9 @@ def main(input_filepath, output_filepath, rotate, flip, brightness, contrast):
         contrast = random.uniform(0.7, 1.3)
         transform_list.append(
             transforms.ColorJitter(contrast=contrast)
-        )  
+        ) 
+    if cutout:
+        transform_list.append(Cutout(cutout_size=6))
     
     if transform_list:
         transform_pipeline = transforms.Compose(transform_list)
